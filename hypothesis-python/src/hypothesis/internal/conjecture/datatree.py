@@ -66,6 +66,15 @@ class Killed:
 
     next_node = attr.ib()
 
+    def _repr_pretty_(self, p, cycle):
+        assert cycle is False
+        p.text("Killed")
+
+
+def node(ir_type, value, kwargs, *, forced):
+    forced_marker = " [forced]" if forced else ""
+    return f"{ir_type} {value}{forced_marker} {kwargs}"
+
 
 @attr.s(slots=True)
 class Branch:
@@ -82,6 +91,16 @@ class Branch:
         assert max_children > 0
         return max_children
 
+    def _repr_pretty_(self, p, cycle):
+        assert cycle is False
+        for i, (value, child) in enumerate(self.children.items()):
+            if i > 0:
+                p.break_()
+            p.text(node(self.ir_type, value, self.kwargs, forced=False))
+            with p.indent(2):
+                p.break_()
+                p.pretty(child)
+
 
 @attr.s(slots=True, frozen=True)
 class Conclusion:
@@ -89,6 +108,10 @@ class Conclusion:
 
     status = attr.ib()
     interesting_origin = attr.ib()
+
+    def _repr_pretty_(self, p, cycle):
+        assert cycle is False
+        p.text(f"Conclusion ({self.status!r})")
 
 
 # The number of max children where, beyond this, it is practically impossible
@@ -362,6 +385,29 @@ class TreeNode:
     # See also TreeNode.check_exhausted.
     is_exhausted: bool = attr.ib(default=False, init=False)
 
+    def _repr_pretty_(self, p, cycle):
+        assert cycle is False
+        indent = 0
+        for i, (ir_type, kwargs, value) in enumerate(
+            zip(self.ir_types, self.kwargs, self.values)
+        ):
+            with p.indent(indent):
+                if i > 0:
+                    p.break_()
+                p.text(node(ir_type, value, kwargs, forced=i in self.forced))
+            indent += 2
+
+        if isinstance(self.transition, Branch):
+            if len(self.values) > 0:
+                p.break_()
+            p.pretty(self.transition)
+
+        if isinstance(self.transition, (Killed, Conclusion)):
+            with p.indent(indent):
+                if len(self.values) > 0:
+                    p.break_()
+                p.pretty(self.transition)
+
     @property
     def forced(self):
         if not self.__forced:
@@ -619,6 +665,10 @@ class DataTree:
         for it to be uniform at random, but previous attempts to do that
         have proven too expensive.
         """
+        # from hypothesis.vendor.pretty import RepresentationPrinter
+        # p = RepresentationPrinter()
+        # p.pretty(self.root)
+        # print(f"novel:\n{p.output.getvalue()}")
 
         assert not self.is_exhausted
         novel_prefix = bytearray()
