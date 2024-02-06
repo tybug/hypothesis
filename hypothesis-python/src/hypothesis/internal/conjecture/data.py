@@ -1425,6 +1425,13 @@ class PrimitiveProvider:
         return (sampler, forced_sign_bit, neg_clamper, pos_clamper, nasty_floats)
 
 
+class IRTreeNode:
+    def __init__(self):
+        self.children = []
+
+    def draw_integer(self):
+        self.children.append()
+
 class ConjectureData:
     @classmethod
     def for_buffer(
@@ -1471,6 +1478,9 @@ class ConjectureData:
         self.max_depth = 0
         self.has_discards = False
         self.provider = PrimitiveProvider(self)
+
+        self.ir_depth = 0
+        self.ir_tree = IRTreeNode()
 
         self.__result: "Optional[ConjectureResult]" = None
 
@@ -1567,6 +1577,7 @@ class ConjectureData:
             self.observer.draw_integer(
                 value, was_forced=forced is not None, kwargs=kwargs
             )
+            self.ir_tree.draw_integer(value, kwargs)
         return value
 
     def draw_float(
@@ -1602,6 +1613,7 @@ class ConjectureData:
             self.observer.draw_float(
                 value, kwargs=kwargs, was_forced=forced is not None
             )
+            self.ir_tree.draw_float(value, kwargs)
         return value
 
     def draw_string(
@@ -1625,6 +1637,7 @@ class ConjectureData:
             self.observer.draw_string(
                 value, kwargs=kwargs, was_forced=forced is not None
             )
+            self.ir_tree.draw_string(value, kwargs)
         return value
 
     def draw_bytes(
@@ -1644,6 +1657,7 @@ class ConjectureData:
             self.observer.draw_bytes(
                 value, kwargs=kwargs, was_forced=forced is not None
             )
+            self.ir_tree.draw_bytes(value, kwargs)
         return value
 
     def draw_boolean(
@@ -1665,6 +1679,7 @@ class ConjectureData:
             self.observer.draw_boolean(
                 value, kwargs=kwargs, was_forced=forced is not None
             )
+            self.ir_tree.draw_boolean(value, kwargs)
         return value
 
     def as_result(self) -> Union[ConjectureResult, _Overrun]:

@@ -37,7 +37,8 @@ from hypothesis.internal.conjecture.datatree import (
 )
 from hypothesis.internal.conjecture.junkdrawer import clamp, ensure_free_stackframes
 from hypothesis.internal.conjecture.pareto import NO_SCORE, ParetoFront, ParetoOptimiser
-from hypothesis.internal.conjecture.shrinker import Shrinker, sort_key
+from hypothesis.internal.conjecture.shrinker_v2 import Shrinker
+from hypothesis.internal.conjecture.shrinker import sort_key
 from hypothesis.internal.healthcheck import fail_health_check
 from hypothesis.reporting import base_report, report
 
@@ -805,14 +806,12 @@ class ConjectureRunner:
                     break
 
                 group = self.random.choice(groups)
-
                 ex1, ex2 = (
                     data.examples[i] for i in sorted(self.random.sample(group, 2))
                 )
                 assert ex1.end <= ex2.start
 
                 replacements = [data.buffer[e.start : e.end] for e in [ex1, ex2]]
-
                 replacement = self.random.choice(replacements)
 
                 try:
@@ -822,7 +821,7 @@ class ConjectureRunner:
                     # wrong - labels matching are only a best guess as to
                     # whether the two are equivalent - but it doesn't
                     # really matter. It may not achieve the desired result
-                    # but it's still a perfectly acceptable choice sequence.
+                    # but it's still a perfectly acceptable choice sequence
                     # to try.
                     new_data = self.cached_test_function(
                         data.buffer[: ex1.start]
