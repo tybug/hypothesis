@@ -1425,6 +1425,13 @@ class PrimitiveProvider:
         return (sampler, forced_sign_bit, neg_clamper, pos_clamper, nasty_floats)
 
 
+class IRTreeNode:
+    def __init__(self):
+        self.children = []
+
+    def draw_integer(self):
+        self.children.append()
+
 class ConjectureData:
     @classmethod
     def for_buffer(
@@ -1472,6 +1479,9 @@ class ConjectureData:
         self.has_discards = False
         self.provider = PrimitiveProvider(self)
 
+        self.ir_depth = 0
+        self.ir_tree = IRTreeNode()
+
         self.__result: "Optional[ConjectureResult]" = None
 
         # Observations used for targeted search.  They'll be aggregated in
@@ -1498,6 +1508,9 @@ class ConjectureData:
         self.arg_slices: Set[Tuple[int, int]] = set()
         self.slice_comments: Dict[Tuple[int, int], str] = {}
         self._observability_args: Dict[str, Any] = {}
+        self._observability_predicates: defaultdict = defaultdict(
+            lambda: {"satisfied": 0, "unsatisfied": 0}
+        )
 
         self.extra_information = ExtraInformation()
 
@@ -1564,6 +1577,7 @@ class ConjectureData:
             self.observer.draw_integer(
                 value, was_forced=forced is not None, kwargs=kwargs
             )
+            self.ir_tree.draw_integer(value, kwargs)
         return value
 
     def draw_float(
@@ -1599,6 +1613,7 @@ class ConjectureData:
             self.observer.draw_float(
                 value, kwargs=kwargs, was_forced=forced is not None
             )
+            self.ir_tree.draw_float(value, kwargs)
         return value
 
     def draw_string(
@@ -1622,6 +1637,7 @@ class ConjectureData:
             self.observer.draw_string(
                 value, kwargs=kwargs, was_forced=forced is not None
             )
+            self.ir_tree.draw_string(value, kwargs)
         return value
 
     def draw_bytes(
@@ -1641,6 +1657,7 @@ class ConjectureData:
             self.observer.draw_bytes(
                 value, kwargs=kwargs, was_forced=forced is not None
             )
+            self.ir_tree.draw_bytes(value, kwargs)
         return value
 
     def draw_boolean(
@@ -1662,6 +1679,7 @@ class ConjectureData:
             self.observer.draw_boolean(
                 value, kwargs=kwargs, was_forced=forced is not None
             )
+            self.ir_tree.draw_boolean(value, kwargs)
         return value
 
     def as_result(self) -> Union[ConjectureResult, _Overrun]:
@@ -1679,9 +1697,11 @@ class ConjectureData:
                 examples=self.examples,
                 blocks=self.blocks,
                 output=self.output,
-                extra_information=self.extra_information
-                if self.extra_information.has_information()
-                else None,
+                extra_information=(
+                    self.extra_information
+                    if self.extra_information.has_information()
+                    else None
+                ),
                 has_discards=self.has_discards,
                 target_observations=self.target_observations,
                 tags=frozenset(self.tags),

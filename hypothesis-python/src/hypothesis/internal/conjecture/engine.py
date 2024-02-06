@@ -37,7 +37,8 @@ from hypothesis.internal.conjecture.datatree import (
 )
 from hypothesis.internal.conjecture.junkdrawer import clamp, ensure_free_stackframes
 from hypothesis.internal.conjecture.pareto import NO_SCORE, ParetoFront, ParetoOptimiser
-from hypothesis.internal.conjecture.shrinker import Shrinker, sort_key
+from hypothesis.internal.conjecture.shrinker_v2 import Shrinker
+from hypothesis.internal.conjecture.shrinker import sort_key
 from hypothesis.internal.healthcheck import fail_health_check
 from hypothesis.reporting import base_report, report
 
@@ -129,6 +130,7 @@ class ConjectureRunner:
 
         # Global dict of per-phase statistics, and a list of per-call stats
         # which transfer to the global dict at the end of each phase.
+        self._current_phase = "(not a phase)"
         self.statistics = {}
         self.stats_per_test_case = []
 
@@ -175,6 +177,7 @@ class ConjectureRunner:
         self.stats_per_test_case.clear()
         start_time = time.perf_counter()
         try:
+            self._current_phase = phase
             yield
         finally:
             self.statistics[phase + "-phase"] = {
@@ -554,7 +557,7 @@ class ConjectureRunner:
                 corpus.extend(extra)
 
             for existing in corpus:
-                data = self.cached_test_function(existing)
+                data = self.cached_test_function(existing, extend=BUFFER_SIZE)
                 if data.status != Status.INTERESTING:
                     self.settings.database.delete(self.database_key, existing)
                     self.settings.database.delete(self.secondary_key, existing)
@@ -569,7 +572,7 @@ class ConjectureRunner:
                 pareto_corpus.sort(key=sort_key)
 
                 for existing in pareto_corpus:
-                    data = self.cached_test_function(existing)
+                    data = self.cached_test_function(existing, extend=BUFFER_SIZE)
                     if data not in self.pareto_front:
                         self.settings.database.delete(self.pareto_key, existing)
                     if data.status == Status.INTERESTING:
@@ -693,6 +696,7 @@ class ConjectureRunner:
         ran_optimisations = False
 
         while self.should_generate_more():
+            self._current_phase = "generate"
             prefix = self.generate_novel_prefix()
             assert len(prefix) <= BUFFER_SIZE
             if (
@@ -763,6 +767,7 @@ class ConjectureRunner:
                 and not ran_optimisations
             ):
                 ran_optimisations = True
+                self._current_phase = "target"
                 self.optimise_targets()
 
     def generate_mutations_from(self, data):
@@ -801,14 +806,12 @@ class ConjectureRunner:
                     break
 
                 group = self.random.choice(groups)
-
                 ex1, ex2 = (
                     data.examples[i] for i in sorted(self.random.sample(group, 2))
                 )
                 assert ex1.end <= ex2.start
 
                 replacements = [data.buffer[e.start : e.end] for e in [ex1, ex2]]
-
                 replacement = self.random.choice(replacements)
 
                 try:
@@ -818,7 +821,7 @@ class ConjectureRunner:
                     # wrong - labels matching are only a best guess as to
                     # whether the two are equivalent - but it doesn't
                     # really matter. It may not achieve the desired result
-                    # but it's still a perfectly acceptable choice sequence.
+                    # but it's still a perfectly acceptable choice sequence
                     # to try.
                     new_data = self.cached_test_function(
                         data.buffer[: ex1.start]
@@ -884,7 +887,8 @@ class ConjectureRunner:
             if any_improvements:
                 continue
 
-            self.pareto_optimise()
+            if self.best_observed_targets:
+                self.pareto_optimise()
 
             if prev_calls == self.call_count:
                 break
@@ -902,6 +906,7 @@ class ConjectureRunner:
             # but if we've been asked to run it but not generation then we have to
             # run it explciitly on its own here.
             if Phase.generate not in self.settings.phases:
+                self._current_phase = "target"
                 self.optimise_targets()
         with self._log_phase_statistics("shrink"):
             self.shrink_interesting_examples()
@@ -1011,6 +1016,7 @@ class ConjectureRunner:
             predicate,
             allow_transition=allow_transition,
             explain=Phase.explain in self.settings.phases,
+            in_target_phase=self._current_phase == "target",
         )
 
     def cached_test_function(self, buffer, *, error_on_discard=False, extend=0):
