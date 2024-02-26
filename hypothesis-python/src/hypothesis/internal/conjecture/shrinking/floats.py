@@ -35,7 +35,7 @@ class Float(Shrinker):
             self.debug(
                 f"rejecting {value} as out of bounds for [{min_value}, {max_value}]"
             )
-            return
+            return False
         return super().consider(value)
 
     def make_immutable(self, f):
