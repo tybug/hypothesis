@@ -394,6 +394,16 @@ def documentation():
         )
 
 
+@task()
+def website():
+    subprocess.call(["pelican"], cwd=tools.ROOT / "website")
+
+
+@task()
+def live_website():
+    subprocess.call(["pelican", "--autoreload", "--listen"], cwd=tools.ROOT / "website")
+
+
 def run_tox(task, version, *args):
     python = install.python_executable(version)
 
@@ -421,8 +431,8 @@ PYTHONS = {
     "3.8": "3.8.18",
     "3.9": "3.9.18",
     "3.10": "3.10.13",
-    "3.11": "3.11.7",
-    "3.12": "3.12.1",
+    "3.11": "3.11.8",
+    "3.12": "3.12.2",
     "3.13": "3.13.0a3",
     "pypy3.8": "pypy3.8-7.3.11",
     "pypy3.9": "pypy3.9-7.3.15",

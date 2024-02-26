@@ -43,6 +43,13 @@ MUTATION_POOL_SIZE = 100
 MIN_TEST_CALLS = 10
 BUFFER_SIZE = 8 * 1024
 
+# If the shrinking phase takes more than five minutes, abort it early and print
+# a warning.   Many CI systems will kill a build after around ten minutes with
+# no output, and appearing to hang isn't great for interactive use either -
+# showing partially-shrunk examples is better than quitting with no examples!
+# (but make it monkeypatchable, for the rare users who need to keep on shrinking)
+MAX_SHRINKING_SECONDS = 300
+
 
 @attr.s
 class HealthCheckState:
@@ -805,8 +812,8 @@ class ConjectureRunner:
                 )
                 assert ex1.end <= ex2.start
 
-                replacements = [data.buffer[e.start : e.end] for e in [ex1, ex2]]
-                replacement = self.random.choice(replacements)
+                e = self.random.choice([ex1, ex2])
+                replacement = data.buffer[e.start : e.end]
 
                 try:
                     # We attempt to replace both the the examples with
@@ -915,7 +922,7 @@ class ConjectureRunner:
         )
 
     def new_conjecture_data_for_buffer(self, buffer):
-        return ConjectureData.for_buffer(buffer, observer=self.tree.new_observer())
+        return self.new_conjecture_data(buffer, max_length=len(buffer))
 
     def shrink_interesting_examples(self):
         """If we've found interesting examples, try to replace each of them
@@ -928,12 +935,7 @@ class ConjectureRunner:
             return
 
         self.debug("Shrinking interesting examples")
-
-        # If the shrinking phase takes more than five minutes, abort it early and print
-        # a warning.   Many CI systems will kill a build after around ten minutes with
-        # no output, and appearing to hang isn't great for interactive use either -
-        # showing partially-shrunk examples is better than quitting with no examples!
-        self.finish_shrinking_deadline = time.perf_counter() + 300
+        self.finish_shrinking_deadline = time.perf_counter() + MAX_SHRINKING_SECONDS
 
         for prev_data in sorted(
             self.interesting_examples.values(), key=lambda d: sort_key(d.buffer)

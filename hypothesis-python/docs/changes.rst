@@ -18,6 +18,95 @@ Hypothesis 6.x
 
     .. include:: ../RELEASE.rst
 
+.. _v6.98.11:
+
+--------------------
+6.98.11 - 2024-02-24
+--------------------
+
+This patch makes stateful testing somewhat less likely to get stuck
+when there are only a few possible rules.
+
+.. _v6.98.10:
+
+--------------------
+6.98.10 - 2024-02-22
+--------------------
+
+This patch :pep:`adds a note <678>` to errors which occur while drawing from
+a strategy, to make it easier to tell why your test failed in such cases.
+
+.. _v6.98.9:
+
+-------------------
+6.98.9 - 2024-02-20
+-------------------
+
+This patch ensures that :doc:`observability <observability>` outputs include
+an informative repr for :class:`~hypothesis.stateful.RuleBasedStateMachine`
+stateful tests, along with more detailed timing information.
+
+.. _v6.98.8:
+
+-------------------
+6.98.8 - 2024-02-18
+-------------------
+
+This patch improves :doc:`the Ghostwriter <ghostwriter>` for binary operators.
+
+.. _v6.98.7:
+
+-------------------
+6.98.7 - 2024-02-18
+-------------------
+
+This patch improves import-detection in :doc:`the Ghostwriter <ghostwriter>`
+(:issue:`3884`), particularly for :func:`~hypothesis.strategies.from_type`
+and strategies from ``hypothesis.extra.*``.
+
+.. _v6.98.6:
+
+-------------------
+6.98.6 - 2024-02-15
+-------------------
+
+This patch clarifies the documentation on stateful testing (:issue:`3511`).
+
+.. _v6.98.5:
+
+-------------------
+6.98.5 - 2024-02-14
+-------------------
+
+This patch improves argument-to-json conversion for :doc:`observability <observability>`
+output.  Checking for a ``.to_json()`` method on the object *before* a few other
+options like dataclass support allows better user control of the process (:issue:`3880`).
+
+.. _v6.98.4:
+
+-------------------
+6.98.4 - 2024-02-12
+-------------------
+
+This patch updates our vendored `list of top-level domains <https://www.iana.org/domains/root/db>`__,
+which is used by the provisional :func:`~hypothesis.provisional.domains` strategy.
+
+.. _v6.98.3:
+
+-------------------
+6.98.3 - 2024-02-08
+-------------------
+
+This patch fixes an error when generating :doc:`observability <observability>` reports involving large (``n > 1e308``) integers.
+
+.. _v6.98.2:
+
+-------------------
+6.98.2 - 2024-02-05
+-------------------
+
+This patch refactors some internals. There is no user-visible change.
+
 .. _v6.98.1:
 
 -------------------

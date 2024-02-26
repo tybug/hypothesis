@@ -18,6 +18,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
+    DefaultDict,
     Dict,
     FrozenSet,
     Iterable,
@@ -39,7 +40,7 @@ import attr
 
 from hypothesis.errors import Frozen, InvalidArgument, StopTest
 from hypothesis.internal.cache import LRUReusedCache
-from hypothesis.internal.compat import floor, int_from_bytes, int_to_bytes
+from hypothesis.internal.compat import add_note, floor, int_from_bytes, int_to_bytes
 from hypothesis.internal.conjecture.floats import float_to_lex, lex_to_float
 from hypothesis.internal.conjecture.junkdrawer import IntList, uniform
 from hypothesis.internal.conjecture.utils import (
@@ -1687,6 +1688,7 @@ class ConjectureData:
         self.forced_indices: "Set[int]" = set()
         self.interesting_origin: Optional[InterestingOrigin] = None
         self.draw_times: "Dict[str, float]" = {}
+        self._stateful_run_times: "DefaultDict[str, float]" = defaultdict(float)
         self.max_depth = 0
         self.has_discards = False
         self.provider = PrimitiveProvider(self)
@@ -1818,7 +1820,9 @@ class ConjectureData:
 
         if forced is not None:
             assert allow_nan or not math.isnan(forced)
-            assert math.isnan(forced) or min_value <= forced <= max_value
+            assert math.isnan(forced) or (
+                sign_aware_lte(min_value, forced) and sign_aware_lte(forced, max_value)
+            )
 
         kwargs: FloatKWargs = {
             "min_value": min_value,
@@ -2003,14 +2007,17 @@ class ConjectureData:
         try:
             if not at_top_level:
                 return strategy.do_draw(self)
-            else:
-                assert start_time is not None
+            assert start_time is not None
+            key = observe_as or f"generate:unlabeled_{len(self.draw_times)}"
+            try:
                 strategy.validate()
                 try:
                     return strategy.do_draw(self)
                 finally:
-                    key = observe_as or f"unlabeled_{len(self.draw_times)}"
                     self.draw_times[key] = time.perf_counter() - start_time
+            except Exception as err:
+                add_note(err, f"while generating {key[9:]!r} from {strategy!r}")
+                raise
         finally:
             self.stop_example()
 
