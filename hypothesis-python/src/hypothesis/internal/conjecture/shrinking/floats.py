@@ -14,14 +14,29 @@ import sys
 from hypothesis.internal.conjecture.floats import float_to_lex
 from hypothesis.internal.conjecture.shrinking.common import Shrinker
 from hypothesis.internal.conjecture.shrinking.integer import Integer
+from hypothesis.internal.floats import sign_aware_lte
 
 MAX_PRECISE_INTEGER = 2**53
 
 
 class Float(Shrinker):
-    def setup(self):
+    def setup(self, leaf):
         self.NAN = math.nan
         self.debugging_enabled = True
+        self.leaf = leaf
+
+    def consider(self, value):
+        self.debug(f"considering {value}")
+        min_value = self.leaf.kwargs["min_value"]
+        max_value = self.leaf.kwargs["max_value"]
+        if not math.isnan(value) and not (
+            sign_aware_lte(min_value, value) and sign_aware_lte(value, max_value)
+        ):
+            self.debug(
+                f"rejecting {value} as out of bounds for [{min_value}, {max_value}]"
+            )
+            return
+        return super().consider(value)
 
     def make_immutable(self, f):
         f = float(f)
