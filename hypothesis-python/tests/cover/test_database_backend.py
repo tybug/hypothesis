@@ -20,7 +20,7 @@ from typing import Iterator, Optional, Tuple
 
 import pytest
 
-from hypothesis import configuration, given, settings, strategies as st
+from hypothesis import configuration, given, settings, strategies as st, example
 from hypothesis.database import (
     DirectoryBasedExampleDatabase,
     ExampleDatabase,
@@ -28,9 +28,12 @@ from hypothesis.database import (
     InMemoryExampleDatabase,
     MultiplexedDatabase,
     ReadOnlyDatabase,
+    ir_from_bytes,
+    ir_to_bytes,
 )
 from hypothesis.errors import HypothesisWarning
 from hypothesis.internal.compat import WINDOWS
+from hypothesis.internal.conjecture.data import ir_value_equal
 from hypothesis.stateful import Bundle, RuleBasedStateMachine, rule
 from hypothesis.strategies import binary, lists, tuples
 from hypothesis.utils.conventions import not_set
@@ -443,3 +446,38 @@ def test_database_directory_inaccessible(dirs, tmp_path, monkeypatch):
     ):
         database = ExampleDatabase(not_set)
     database.save(b"fizz", b"buzz")
+
+
+@given(
+    st.lists(
+        st.booleans()
+        | st.integers()
+        | st.floats()
+        | st.text(st.characters())
+        | st.binary()
+    )
+)
+@example([239])
+@example([-239])
+@example([1000])
+@example("\ud9bd")
+def test_ir_serialization(ir):
+    s = ir_to_bytes(ir)
+    assert isinstance(s, bytes)
+
+    ir2 = ir_from_bytes(s)
+    assert len(ir) == len(ir2)
+
+    for a, b in zip(ir, ir2, strict=True):
+        assert type(a) == type(b)
+        ir_type = {
+            str: "string",
+            float: "float",
+            int: "integer",
+            bool: "boolean",
+            bytes: "bytes",
+        }[type(a)]
+        assert ir_value_equal(ir_type, a, b)
+
+    s2 = ir_to_bytes(ir2)
+    assert s == s2
