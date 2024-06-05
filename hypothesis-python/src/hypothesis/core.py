@@ -39,6 +39,7 @@ from typing import (
     TypeVar,
     Union,
     overload,
+    Sequence,
 )
 from unittest import TestCase
 
@@ -76,7 +77,11 @@ from hypothesis.internal.compat import (
     int_from_bytes,
 )
 from hypothesis.internal.conjecture.data import ConjectureData, Status
-from hypothesis.internal.conjecture.engine import BUFFER_SIZE, ConjectureRunner
+from hypothesis.internal.conjecture.engine import (
+    BUFFER_SIZE,
+    ConjectureRunner,
+    PrimitiveProvider,
+)
 from hypothesis.internal.conjecture.junkdrawer import ensure_free_stackframes
 from hypothesis.internal.conjecture.shrinker import sort_key
 from hypothesis.internal.entropy import deterministic_PRNG
@@ -87,6 +92,7 @@ from hypothesis.internal.escalation import (
     format_exception,
     get_trimmed_traceback,
 )
+from hypothesis.internal.floats import sign_aware_lte
 from hypothesis.internal.healthcheck import fail_health_check
 from hypothesis.internal.observability import (
     OBSERVABILITY_COLLECT_COVERAGE,
@@ -121,6 +127,7 @@ from hypothesis.reporting import (
     verbose_report,
     with_reporter,
 )
+from hypothesis.internal.intervalsets import IntervalSet
 from hypothesis.statistics import describe_statistics, describe_targets, note_statistics
 from hypothesis.strategies._internal.misc import NOTHING
 from hypothesis.strategies._internal.strategies import (
@@ -1339,6 +1346,188 @@ class HypothesisHandle:
             self.__cached_target = self._get_fuzz_target()
             return self.__cached_target
 
+    @property
+    def fuzz_with_atheris(
+        self,
+    ) -> Callable[[Union[bytes, bytearray, memoryview, BinaryIO]], Optional[bytes]]:
+        try:
+            return self.__cached_target_atheris  # type: ignore
+        except AttributeError:
+            self.__cached_target_atheris = self._get_fuzz_target(use_atheris=True)
+            return self.__cached_target_atheris
+
+
+DRAW_STRING_DEFAULT_MAX_SIZE = 100
+
+class AtherisProvider(PrimitiveProvider):
+    def draw_string(
+        self,
+        intervals: IntervalSet,
+        *,
+        min_size: int = 0,
+        max_size: Optional[int] = None,
+        forced: Optional[str] = None,
+        fake_forced: bool = False,
+    ) -> str:
+        if forced is not None:
+            return forced
+
+        if max_size is None:
+            max_size = DRAW_STRING_DEFAULT_MAX_SIZE
+        max_size = min(max_size, DRAW_STRING_DEFAULT_MAX_SIZE)
+
+
+
+        # commented sections are alternative implementations
+
+        import hypothesis.internal.conjecture.data
+        max_size = hypothesis.internal.conjecture.data.DRAW_STRING_DEFAULT_MAX_SIZE
+        from hypothesis.internal.conjecture.utils import many
+        average_size = min(
+            max(min_size * 2, min_size + 5),
+            0.5 * (min_size + max_size),
+        )
+        elements = many(self._cd, min_size=min_size, max_size=max_size, average_size=average_size)
+        chars = []
+        while elements.more():
+            i = self.draw_integer(0, len(intervals) - 1)
+            chars.append(chr(intervals[i]))
+        return "".join(chars)
+
+
+        # return self.fdp.ConsumeUnicode(100)
+
+
+        # # always draw max_size so we don't misalign because of length changes,
+        # # but only respect n of those
+        # n = self.draw_integer(min_size, max_size)
+        # chars = []
+        # for i in range(max_size):
+        #     idx = self.draw_integer(0, len(intervals) - 1)
+        #     if i < n:
+        #         chars.append(chr(intervals[idx]))
+        # return "".join(chars)
+
+
+
+        # n = self.draw_integer(min_size, max_size)
+        # s = ""
+        # for _ in range(n):
+        #     i = self.draw_integer(0, len(intervals) - 1)
+        #     s += chr(intervals[i])
+        # return s
+
+    def draw_boolean(
+        self,
+        p: float = 0.5,
+        *,
+        forced: Optional[bool] = None,
+        fake_forced: bool = False,
+    ) -> bool:
+        if forced is not None:
+            return forced
+
+        # if p == 0.5:
+        #     # TODO reconsider this, could cause misalignment issues when p changes
+        #     # and we end up drawing a different number of bytes for ConsumeBool vs ConsumeProbability
+        #     return self.fdp.ConsumeBool()
+
+        drawn_p = self.fdp.ConsumeProbability()
+        if p <= 0:
+            return False
+        if p >= 1:
+            return True
+        # make drawn_p = 0 be false instead of true.
+        # 0.0 is the default value of ConsumeProbability when we overrun the
+        # buffer. arguably we should be doing mark_overrun in those cases though
+        return drawn_p > (1 - p)
+
+    def draw_integer(
+        self,
+        min_value: Optional[int] = None,
+        max_value: Optional[int] = None,
+        *,
+        weights: Optional[Sequence[float]] = None,
+        shrink_towards: int = 0,
+        forced: Optional[int] = None,
+        fake_forced: bool = False,
+    ) -> int:
+        if forced is not None:
+            return forced
+
+        probe_radius = 2**127 - 1
+        if min_value is None and max_value is None:
+            min_value = -probe_radius
+            max_value = probe_radius
+        elif min_value is None:
+            assert max_value is not None
+            min_value = max_value - probe_radius
+        elif max_value is None:
+            assert min_value is not None
+            max_value = min_value + probe_radius
+
+        if weights is not None:
+            assert False
+            # TODO
+            # assert len(weights) == (max_value - min_value + 1)
+            # cum_p = 0
+            # p = self.fdp.ConsumeProbability()
+            # i = 0
+            # while cum_p < p:
+            #     cum_p + weights[i]
+
+        return self.fdp.ConsumeIntInRange(min_value, max_value)
+
+    def draw_float(
+        self,
+        *,
+        min_value: float = -math.inf,
+        max_value: float = math.inf,
+        allow_nan: bool = True,
+        smallest_nonzero_magnitude: float,
+        forced: Optional[float] = None,
+        fake_forced: bool = False,
+    ) -> float:
+        if forced is not None:
+            return forced
+
+        if allow_nan and self.draw_boolean():
+            return math.nan
+
+        # we draw a float from atheris and hope it's inside our bounds. if it's not,
+        # don't retry because that would cause misalignment. just give up and return
+        # an arbitrary valid value.
+        def arbitrary_clamp(f):
+            return min_value
+
+        # happy case: bounds are reasonable (not inf).
+        if not math.isinf(min_value) and not math.isinf(max_value):
+            f = self.fdp.ConsumeFloatInRange(min_value, max_value)
+            if f < smallest_nonzero_magnitude:
+                return arbitrary_clamp(f)
+            return f
+
+        f = self.fdp.ConsumeFloat()
+        if math.isnan(f):
+            if allow_nan:
+                return f
+            return arbitrary_clamp(f)
+
+        if not (sign_aware_lte(min_value, f) and sign_aware_lte(f, max_value)):
+            return arbitrary_clamp(f)
+
+        if min_value < smallest_nonzero_magnitude:
+            return arbitrary_clamp(f)
+
+        return f
+
+    def draw_bytes(
+        self, size: int, *, forced: Optional[bytes] = None, fake_forced: bool = False
+    ) -> bytes:
+        if forced is not None:
+            return forced
+        return self.fdp.ConsumeBytes(size)
+
 
 @overload
 def given(
@@ -1640,9 +1829,9 @@ def given(
             if not (ran_explicit_examples or state.ever_executed):
                 raise SKIP_BECAUSE_NO_EXAMPLES
 
-        def _get_fuzz_target() -> (
-            Callable[[Union[bytes, bytearray, memoryview, BinaryIO]], Optional[bytes]]
-        ):
+        def _get_fuzz_target(
+            *, use_atheris=False
+        ) -> Callable[[Union[bytes, bytearray, memoryview, BinaryIO]], Optional[bytes]]:
             # Because fuzzing interfaces are very performance-sensitive, we use a
             # somewhat more complicated structure here.  `_get_fuzz_target()` is
             # called by the `HypothesisHandle.fuzz_one_input` property, allowing
@@ -1680,7 +1869,13 @@ def given(
                 if isinstance(buffer, io.IOBase):
                     buffer = buffer.read(BUFFER_SIZE)
                 assert isinstance(buffer, (bytes, bytearray, memoryview))
-                data = ConjectureData.for_buffer(buffer)
+                if use_atheris:
+                    import atheris
+
+                    data = ConjectureData(BUFFER_SIZE, b"", provider=AtherisProvider)
+                    data.provider.fdp = atheris.FuzzedDataProvider(buffer)
+                else:
+                    data = ConjectureData.for_buffer(buffer)
                 try:
                     state.execute_once(data)
                 except (StopTest, UnsatisfiedAssumption):

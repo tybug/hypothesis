@@ -1951,7 +1951,7 @@ class ConjectureData:
         max_length: int,
         prefix: Union[List[int], bytes, bytearray],
         *,
-        random: Optional[Random],
+        random: Optional[Random] = None,
         observer: Optional[DataObserver] = None,
         provider: Union[type, PrimitiveProvider] = HypothesisProvider,
         ir_tree_prefix: Optional[List[IRNode]] = None,
@@ -1966,9 +1966,15 @@ class ConjectureData:
         self.overdraw = 0
         self.__prefix = bytes(prefix)
         self.__random = random
+        self.provider = provider(self) if isinstance(provider, type) else provider
+        assert isinstance(self.provider, PrimitiveProvider)
 
         if ir_tree_prefix is None:
-            assert random is not None or max_length <= len(prefix)
+            assert (
+                random is not None
+                or max_length <= len(prefix)
+                or not isinstance(self.provider, HypothesisProvider)
+            )
 
         self.blocks = Blocks(self)
         self.buffer: "Union[bytes, bytearray]" = bytearray()
@@ -1987,9 +1993,6 @@ class ConjectureData:
         self._stateful_run_times: "DefaultDict[str, float]" = defaultdict(float)
         self.max_depth = 0
         self.has_discards = False
-
-        self.provider = provider(self) if isinstance(provider, type) else provider
-        assert isinstance(self.provider, PrimitiveProvider)
 
         self.__result: "Optional[ConjectureResult]" = None
 
