@@ -1951,7 +1951,7 @@ class ConjectureData:
         max_length: int,
         prefix: Union[List[int], bytes, bytearray],
         *,
-        random: Optional[Random],
+        random: Optional[Random] = None,
         observer: Optional[DataObserver] = None,
         provider: Union[type, PrimitiveProvider] = HypothesisProvider,
         ir_tree_prefix: Optional[List[IRNode]] = None,
@@ -1964,11 +1964,17 @@ class ConjectureData:
         self.max_length = max_length
         self.is_find = False
         self.overdraw = 0
-        self.__prefix = bytes(prefix)
-        self.__random = random
+        self.prefix = bytes(prefix)
+        self.random = random
+        self.provider = provider(self) if isinstance(provider, type) else provider
+        assert isinstance(self.provider, PrimitiveProvider)
 
         if ir_tree_prefix is None:
-            assert random is not None or max_length <= len(prefix)
+            assert (
+                random is not None
+                or max_length <= len(prefix)
+                or not isinstance(self.provider, HypothesisProvider)
+            )
 
         self.blocks = Blocks(self)
         self.buffer: "Union[bytes, bytearray]" = bytearray()
@@ -1987,9 +1993,6 @@ class ConjectureData:
         self._stateful_run_times: "DefaultDict[str, float]" = defaultdict(float)
         self.max_depth = 0
         self.has_discards = False
-
-        self.provider = provider(self) if isinstance(provider, type) else provider
-        assert isinstance(self.provider, PrimitiveProvider)
 
         self.__result: "Optional[ConjectureResult]" = None
 
@@ -2595,15 +2598,15 @@ class ConjectureData:
 
         if forced is not None:
             buf = int_to_bytes(forced, n_bytes)
-        elif self._bytes_drawn < len(self.__prefix):
+        elif self._bytes_drawn < len(self.prefix):
             index = self._bytes_drawn
-            buf = self.__prefix[index : index + n_bytes]
+            buf = self.prefix[index : index + n_bytes]
             if len(buf) < n_bytes:
-                assert self.__random is not None
-                buf += uniform(self.__random, n_bytes - len(buf))
+                assert self.random is not None
+                buf += uniform(self.random, n_bytes - len(buf))
         else:
-            assert self.__random is not None
-            buf = uniform(self.__random, n_bytes)
+            assert self.random is not None
+            buf = uniform(self.random, n_bytes)
         buf = bytearray(buf)
         self._bytes_drawn += n_bytes
 

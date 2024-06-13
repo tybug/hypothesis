@@ -9,6 +9,7 @@
 # obtain one at https://mozilla.org/MPL/2.0/.
 
 """This module provides the core primitives of Hypothesis, such as given."""
+from contextlib import contextmanager
 
 import base64
 import contextlib
@@ -39,6 +40,7 @@ from typing import (
     TypeVar,
     Union,
     overload,
+    Mapping,
 )
 from unittest import TestCase
 
@@ -52,6 +54,7 @@ from hypothesis._settings import (
     local_settings,
     settings as Settings,
 )
+from hypothesis.internal.cache import LRUReusedCache
 from hypothesis.control import BuildContext
 from hypothesis.errors import (
     DeadlineExceeded,
@@ -74,9 +77,20 @@ from hypothesis.internal.compat import (
     bad_django_TestCase,
     get_type_hints,
     int_from_bytes,
+    int_to_bytes,
 )
-from hypothesis.internal.conjecture.data import ConjectureData, Status
-from hypothesis.internal.conjecture.engine import BUFFER_SIZE, ConjectureRunner
+from hypothesis.internal.conjecture.data import (
+    ConjectureData,
+    Status,
+    IRTypeName,
+    IRKWargsType,
+    IRType,
+)
+from hypothesis.internal.conjecture.engine import (
+    BUFFER_SIZE,
+    ConjectureRunner,
+    PrimitiveProvider,
+)
 from hypothesis.internal.conjecture.junkdrawer import ensure_free_stackframes
 from hypothesis.internal.conjecture.shrinker import sort_key
 from hypothesis.internal.entropy import deterministic_PRNG
@@ -129,6 +143,7 @@ from hypothesis.strategies._internal.strategies import (
     check_strategy,
 )
 from hypothesis.strategies._internal.utils import to_jsonable
+from hypothesis.internal.conjecture.utils import _calc_p_continue
 from hypothesis.vendor.pretty import RepresentationPrinter
 from hypothesis.version import __version__
 
@@ -1300,6 +1315,116 @@ def fake_subTest(self, msg=None, **__):
     yield
 
 
+BOUNDS_CACHE_SIZE = 16_384  # 2**14
+data_to_bounds: Mapping[
+    bytes, Mapping[Tuple[int, int], Tuple[IRTypeName, IRKWargsType, IRType]]
+] = LRUReusedCache(BOUNDS_CACHE_SIZE)
+largest_overrun = 0
+
+statistics = {
+    "num_calls": 0,
+    "per_item_stats": []
+}
+
+custom_mutator_called = False
+
+def num_mutations(*, min_size, max_size, random):
+    # TODO tweak this distribution
+    average_size = min(
+        max(min_size * 1.3, min_size + 3),
+        0.5 * (min_size + max_size),
+    )
+    # print(f"{min_size=}, {average_size=}, {max_size=}")
+
+    p_continue = _calc_p_continue(average_size - min_size, max_size - min_size)
+    size = min_size
+    while random.random() < p_continue and size < max_size:
+        size += 1
+    return size
+
+
+def custom_mutator(data, buffer_size, seed):
+    # custom_mutator should be called by atheris exactly once per test case.
+    global custom_mutator_called
+    assert not custom_mutator_called
+    custom_mutator_called = True
+
+    stats = {}
+    random = Random(seed)
+    try:
+        bounds = data_to_bounds[data]
+    except KeyError:
+        # we haven't seen this data before. either I messed up the code (possible)
+        # or atheris is trying a fresh input.
+        stats["mode"] = "fresh"
+        # ramp up to buffer_size or pick a weighted length from [0, buffer_size]?
+        # returning randbytes(buffer_size) probably has performance implications.
+        return random.randbytes(100)
+
+    stats["mode"] = "mutate"
+    stats["overrun"] = False
+
+    choices = list(bounds.keys())
+    num_mutations_ = num_mutations(min_size=1, max_size=len(choices), random=random)
+    mutations = random.sample(range(len(choices)), num_mutations_)
+    stats["num_mutations"] = len(mutations)
+    stats["before"] = [v for (_, _, v) in bounds.values()]
+    stats["mutations"] = []
+    after = [v for (_, _, v) in bounds.values()]
+
+    for i in mutations:
+        start, end = choices[i]
+        (ir_type, kwargs, value) = bounds[(start, end)]
+        # TODO handle forced values - just choose another node to mutate? or
+        # simpler yet, sample from bounds which aren't forced.
+        assert kwargs["forced"] is None
+
+        if ir_type == "integer":
+            min_value = kwargs["min_value"]
+            max_value = kwargs["max_value"]
+            assert min_value is not None
+            assert max_value is not None
+
+            forced = random.randint(min_value, max_value)
+        elif ir_type == "boolean":
+            p = kwargs["p"]
+            assert 0 < p < 1
+
+            forced = random.random() < p
+        else:
+            assert False
+            # fully random replacement of the same size
+            size = end - start
+            replacement = random.randbytes(size)
+
+        # value of the prefix doesn't matter since we're forcing the draw.
+        cd = AtherisData(BUFFER_SIZE, prefix=bytes(BUFFER_SIZE), random=random)
+        # overwrite the forced val in the kwargs
+        kwargs = {**kwargs, "forced": forced}
+        getattr(cd, f"draw_{ir_type}")(**kwargs)
+        replacement = cd.buffer
+
+        after[i] = forced
+        stats["mutations"].append({"ir_type": ir_type, "before": value, "after": forced})
+        data = data[:start] + replacement + data[end:]
+
+    if len(data) <= largest_overrun:
+        stats["overrun"] = True
+        # generate random bytes up to double the largest overrun to ensure we grow
+        # to the appropriate size for the test case.
+        data += random.randbytes(largest_overrun * 2 - len(data))
+        assert len(data) == largest_overrun * 2
+
+    stats["after"] = after
+    statistics["num_calls"] += 1
+    statistics["per_item_stats"].append(stats)
+
+    # import json
+    # print("-- mutate called --")
+    # print(json.dumps(stats, indent=2))
+    return data
+
+
 @attr.s()
 class HypothesisHandle:
     """This object is provided as the .hypothesis attribute on @given tests.
@@ -1338,6 +1463,104 @@ class HypothesisHandle:
         except AttributeError:
             self.__cached_target = self._get_fuzz_target()
             return self.__cached_target
+
+    def fuzz_with_atheris(self, **kwargs):
+        import atheris
+
+        # kwargs["reduce_inputs"] = 0
+
+        # atheris segfaults if we try giving it the empty list. Undoubtedly
+        # it expects argv[0] aka the invoked python file to exist, though I
+        # don't think it does anything with it.
+        argv = ["__main__"] + [f"-{k}={v}" for k, v in kwargs.items()]
+        fuzz_one_input = self._get_fuzz_target(use_atheris=True)
+        # TODO custom_crossover?
+        atheris.Setup(
+            argv, fuzz_one_input, custom_mutator=custom_mutator, custom_crossover=None
+        )
+        atheris.Fuzz()
+
+
+BYTE_MASKS = [(1 << n) - 1 for n in range(8)]
+
+
+class AtherisData(ConjectureData):
+    def draw_bits(
+        self,
+        n: int,
+        *,
+        forced: Optional[int] = None,
+        fake_forced: Optional[bool] = False,
+    ) -> int:
+        if n == 0:
+            return 0
+        assert n > 0
+        n_bytes = (n + 7) >> 3
+        if self.index + n_bytes > len(self.prefix):
+            global largest_overrun
+            largest_overrun = len(self.prefix)
+            self.mark_overrun()
+
+        if forced is not None:
+            # if we are not asking for a multiple of 8 bits, there are 8 - (n % 8)
+            # bits worth of "unused" randomness. Rather than leaving these as 0,
+            # we fill these bits randomly. It makes no difference when re-reading
+            # the forced value and ensures we maintain full randomness during
+            # misalignments.
+            m = 0 if n % 8 == 0 else self.random.randint(0, 2 ** (8 - (n % 8)) - 1)
+            buf = int_to_bytes(forced | (m << n), n_bytes)
+            result = forced
+        else:
+            buf = self.prefix[self.index : self.index + n_bytes]
+            buf = bytearray(buf)
+            # If we have a number of bits that is not a multiple of 8 we have to
+            # mask off the high bits.
+            buf[0] &= BYTE_MASKS[n % 8]
+            result = int_from_bytes(buf)
+
+        assert len(buf) == n_bytes
+        self.buffer.extend(buf)
+        self.index = len(self.buffer)
+        assert result.bit_length() <= n
+        return result
+
+
+class AtherisProvider(PrimitiveProvider):
+    def draw_value(self, ir_type, kwargs):
+        start = self.cd.index
+        v = getattr(self.cd, f"draw_{ir_type}")(**kwargs)
+        self.bounds[(start, self.cd.index)] = (ir_type, kwargs, v)
+        return v
+
+    def draw_boolean(self, **kwargs):
+        return self.draw_value("boolean", kwargs)
+
+    def draw_integer(self, **kwargs):
+        return self.draw_value("integer", kwargs)
+
+    def draw_float(self, **kwargs):
+        return self.draw_value("float", kwargs)
+
+    def draw_string(self, **kwargs):
+        return self.draw_value("string", kwargs)
+
+    def draw_bytes(self, **kwargs):
+        return self.draw_value("bytes", kwargs)
+
+    @contextmanager
+    def per_test_case_context_manager(self):
+        # {(start, end): (ir_type, kwargs, value)}
+        self.bounds = {}
+        self.index = 0
+        self.buffer = bytearray()
+        # TODO seed? how to get mutator / atheris seed here?
+        self.random = Random()
+        self.cd = AtherisData(BUFFER_SIZE, prefix=self.prefix, random=self.random)
+
+        yield
+        # explicitly don't use try/finally as we don't want to set data_to_bounds
+        # in the case of mark_overrun. we may want to change this in the future.
+        data_to_bounds[self.prefix] = self.bounds
 
 
 @overload
@@ -1640,9 +1863,9 @@ def given(
             if not (ran_explicit_examples or state.ever_executed):
                 raise SKIP_BECAUSE_NO_EXAMPLES
 
-        def _get_fuzz_target() -> (
-            Callable[[Union[bytes, bytearray, memoryview, BinaryIO]], Optional[bytes]]
-        ):
+        def _get_fuzz_target(
+            *, use_atheris=False
+        ) -> Callable[[Union[bytes, bytearray, memoryview, BinaryIO]], Optional[bytes]]:
             # Because fuzzing interfaces are very performance-sensitive, we use a
             # somewhat more complicated structure here.  `_get_fuzz_target()` is
             # called by the `HypothesisHandle.fuzz_one_input` property, allowing
@@ -1680,7 +1903,14 @@ def given(
                 if isinstance(buffer, io.IOBase):
                     buffer = buffer.read(BUFFER_SIZE)
                 assert isinstance(buffer, (bytes, bytearray, memoryview))
-                data = ConjectureData.for_buffer(buffer)
+                if use_atheris:
+                    data = ConjectureData(BUFFER_SIZE, b"", provider=AtherisProvider)
+                    # TODO proper init/setup interface
+                    data.provider.prefix = buffer
+                    global custom_mutator_called
+                    custom_mutator_called = False
+                else:
+                    data = ConjectureData.for_buffer(buffer)
                 try:
                     state.execute_once(data)
                 except (StopTest, UnsatisfiedAssumption):
