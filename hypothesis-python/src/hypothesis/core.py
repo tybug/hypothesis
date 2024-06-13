@@ -1375,15 +1375,24 @@ def custom_mutator(data, buffer_size, seed):
     for i in mutations:
         start, end = choices[i]
         (ir_type, kwargs, value) = bounds[(start, end)]
-        # TODO handle forced values - just choose another node to mutate? or
-        # simpler yet, sample from bounds which aren't forced.
-        assert kwargs["forced"] is None
+        # TODO reconsider forced value handling - re-sample from num mutations?
+        # or sample by construction to avoid sampling forced nodes?
+        if kwargs["forced"] is not None:
+            continue
 
         if ir_type == "integer":
             min_value = kwargs["min_value"]
             max_value = kwargs["max_value"]
-            assert min_value is not None
-            assert max_value is not None
+            probe_radius = 2**127 - 1
+            if min_value is None and max_value is None:
+                min_value = -probe_radius
+                max_value = probe_radius
+            elif min_value is None:
+                assert max_value is not None
+                min_value = max_value - probe_radius
+            elif max_value is None:
+                assert min_value is not None
+                max_value = min_value + probe_radius
 
             forced = random.randint(min_value, max_value)
         elif ir_type == "boolean":
@@ -1392,7 +1401,7 @@ def custom_mutator(data, buffer_size, seed):
 
             forced = random.random() < p
         else:
-            assert False
+            # assert False, (ir_type, value)
             # fully random replacement of the same size
             size = end - start
             replacement = random.randbytes(size)
