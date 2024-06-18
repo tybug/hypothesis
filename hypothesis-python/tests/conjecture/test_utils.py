@@ -185,9 +185,13 @@ def test_single_bounds(lo, hi, to):
 
 
 def test_bounds_and_weights():
+    weights = {
+        IntervalSet([(0, 2)]): 1.0,
+    }
+
     for to in (0, 1, 2):
         data = ConjectureData.for_buffer([0] * 100 + [2] * 100)
-        val = data.draw_integer(0, 2, shrink_towards=to, weights=[1, 1, 1])
+        val = data.draw_integer(0, 2, shrink_towards=to, weights=weights)
         assert val == to, to
 
 

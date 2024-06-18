@@ -56,8 +56,25 @@ def test_compute_max_children_is_positive(ir_type_and_kwargs):
 @pytest.mark.parametrize(
     "ir_type, kwargs, count_children",
     [
-        ("integer", {"min_value": 1, "max_value": 2, "weights": [0, 1]}, 1),
-        ("integer", {"min_value": 1, "max_value": 4, "weights": [0, 0.5, 0, 0.5]}, 2),
+        (
+            "integer",
+            {"min_value": 1, "max_value": 2, "weights": {IntervalSet([(1, 2)]): 1.0}},
+            2,
+        ),
+        (
+            "integer",
+            {
+                "min_value": 1,
+                "max_value": 4,
+                "weights": {
+                    IntervalSet([(1, 1)]): 0,
+                    IntervalSet([(2, 2)]): 0.5,
+                    IntervalSet([(3, 3)]): 0,
+                    IntervalSet([(2, 2)]): 0.5,
+                },
+            },
+            2,
+        ),
         # only possibility is the empty string
         (
             "string",
@@ -250,7 +267,11 @@ def test_draw_string_single_interval_with_equal_bounds(s, n):
         {
             "min_value": 1,
             "max_value": 2,
-            "weights": [0, 1],
+            "weights": {
+                IntervalSet([(1, 1)]): 0,
+                IntervalSet([(2, 2)]): 1,
+            },
+            "smallest_nonzero_magnitude": SMALLEST_SUBNORMAL,
         },
     )
 )
@@ -525,19 +546,44 @@ def test_all_children_are_permitted_values(ir_type_and_kwargs):
 @pytest.mark.parametrize(
     "value, ir_type, kwargs, permitted",
     [
-        (0, "integer", {"min_value": 1, "max_value": 2, "shrink_towards": 0}, False),
-        (2, "integer", {"min_value": 0, "max_value": 1, "shrink_towards": 0}, False),
-        (10, "integer", {"min_value": 0, "max_value": 20, "shrink_towards": 0}, True),
+        (
+            0,
+            "integer",
+            {"min_value": 1, "max_value": 2, "shrink_towards": 0, "weights": None},
+            False,
+        ),
+        (
+            2,
+            "integer",
+            {"min_value": 0, "max_value": 1, "shrink_towards": 0, "weights": None},
+            False,
+        ),
+        (
+            10,
+            "integer",
+            {"min_value": 0, "max_value": 20, "shrink_towards": 0, "weights": None},
+            True,
+        ),
         (
             int(2**128 / 2) - 1,
             "integer",
-            {"min_value": None, "max_value": None, "shrink_towards": 0},
+            {
+                "min_value": None,
+                "max_value": None,
+                "shrink_towards": 0,
+                "weights": None,
+            },
             True,
         ),
         (
             int(2**128 / 2),
             "integer",
-            {"min_value": None, "max_value": None, "shrink_towards": 0},
+            {
+                "min_value": None,
+                "max_value": None,
+                "shrink_towards": 0,
+                "weights": None,
+            },
             False,
         ),
         (

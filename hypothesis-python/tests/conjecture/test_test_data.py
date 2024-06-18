@@ -23,6 +23,7 @@ from hypothesis.internal.conjecture.data import (
     StopTest,
     structural_coverage,
 )
+from hypothesis.internal.intervalsets import IntervalSet
 from hypothesis.strategies._internal.strategies import SearchStrategy
 
 
@@ -92,7 +93,10 @@ def test_can_mark_invalid():
 
 @given(st.data(), st.integers(1, 100))
 def test_can_draw_weighted_integer_range(data, n):
-    weights = [1] * n + [0] * n
+    weights = {
+        IntervalSet([(1, n)]): 1.0,
+        IntervalSet([(n + 1, 2 * n)]): 0.0,
+    }
     for _ in range(10):
         # If the weights are working, then we'll never draw a value with weight=0
         x = data.conjecture_data.draw_integer(1, 2 * n, weights=weights)
@@ -102,7 +106,10 @@ def test_can_draw_weighted_integer_range(data, n):
 @given(st.binary(min_size=10))
 def test_can_draw_weighted_integer_range_2(buffer):
     data = ConjectureData.for_buffer(buffer)
-    data.draw_integer(0, 7, weights=[1] * 8, shrink_towards=6)
+    weights = {
+        IntervalSet([(0, 7)]): 1.0,
+    }
+    data.draw_integer(0, 7, weights=weights, shrink_towards=6)
 
 
 def test_can_mark_invalid_with_why():

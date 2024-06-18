@@ -26,11 +26,15 @@ class IntervalSet:
         self.intervals = tuple(intervals)
         self.offsets = [0]
         for u, v in self.intervals:
+            assert u <= v
             self.offsets.append(self.offsets[-1] + v - u + 1)
         self.size = self.offsets.pop()
         self._idx_of_zero = self.index_above(ord("0"))
-        self._idx_of_Z = min(self.index_above(ord("Z")), len(self) - 1)
+        self._idx_of_Z = min(self.index_above(ord("Z")), self.size - 1)
 
+    # XXX accessing len(intervalset) can cause overflow errors for enormous
+    # sizes, where intervalset.size would otherwise be safe:
+    #   OverflowError: cannot fit 'int' into an index-sized integer
     def __len__(self):
         return self.size
 
@@ -66,7 +70,6 @@ class IntervalSet:
     def __contains__(self, elem: Union[str, int]) -> bool:
         if isinstance(elem, str):
             elem = ord(elem)
-        assert 0 <= elem <= 0x10FFFF
         return any(start <= elem <= end for start, end in self.intervals)
 
     def __repr__(self):
@@ -104,6 +107,16 @@ class IntervalSet:
 
     def __hash__(self):
         return hash(self.intervals)
+
+    @classmethod
+    def union_all(cls, intervals):
+        intervals = iter(intervals)
+
+        val = next(intervals)
+        for interval in intervals:
+            val |= interval
+
+        return val
 
     def union(self, other):
         """Merge two sequences of intervals into a single tuple of intervals.

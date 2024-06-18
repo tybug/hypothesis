@@ -20,6 +20,7 @@ from hypothesis.internal.conjecture.engine import BUFFER_SIZE, ConjectureRunner
 from hypothesis.internal.conjecture.utils import calc_label_from_name
 from hypothesis.internal.entropy import deterministic_PRNG
 from hypothesis.internal.floats import SMALLEST_SUBNORMAL, sign_aware_lte
+from hypothesis.internal.intervalsets import IntervalSet
 from hypothesis.strategies._internal.strings import OneCharStringStrategy, TextStrategy
 
 from tests.common.strategies import intervals
@@ -117,28 +118,55 @@ def draw_integer_kwargs(
     shrink_towards = 0
     weights = None
 
-    # this generation is complicated to deal with maintaining any combination of
-    # the following invariants, depending on which parameters are passed:
-    #
-    # (1) min_value <= forced <= max_value
-    # (2) max_value - min_value + 1 == len(weights)
-    # (3) len(weights) <= 255
-
     forced = draw(st.integers()) if use_forced else None
+    # handle the weights case entirely independently from the non-weights case.
     if use_weights:
         assert use_max_value
         assert use_min_value
-        # handle the weights case entirely independently from the non-weights case.
-        # We'll treat the weights as our "key" draw and base all other draws on that.
 
-        # weights doesn't play well with super small floats, so exclude <.01
-        weights = draw(st.lists(st.floats(0.01, 1), min_size=1, max_size=255))
+        min_value = draw(st.integers(max_value=forced))
+        min_val = max(min_value, forced) if forced is not None else min_value
+        max_value = draw(st.integers(min_value=min_val))
 
-        # we additionally pick a central value (if not forced), and then the index
-        # into the weights at which it can be found - aka the min-value offset.
-        center = forced if use_forced else draw(st.integers())
-        min_value = center - draw(st.integers(0, len(weights) - 1))
-        max_value = min_value + len(weights) - 1
+        weights = {}
+        # totally partition [min_value, max_value] into intervals. Treat partition
+        # list [a, b, c, d] as intervals [(a, b), (b + 1, c), (c + 1, d)].
+        # TODO this doesn't cover the case of multiple intervals in a single
+        # IntervalSet.
+        partitions = draw(
+            st.lists(
+                st.integers(min_value, max_value), unique=True, max_size=255 - 1
+            ).map(sorted)
+        )
+        # avoid overlapping endpoints. eg [(1, 1), (1, 2)] is invalid.
+        if min_value not in partitions:
+            partitions = [min_value] + partitions
+        if max_value not in partitions:
+            partitions = partitions + [max_value]
+
+        # Sampler doesn't play well with super small floats, so exclude them
+        nonzero_probs = st.floats(0.01, 1)
+        for i, (a, b) in enumerate(zip(partitions, partitions[1:])):
+            if i > 0:
+                a += 1
+            if forced is not None and a <= forced <= b:
+                # forced's interval has to have nonzero probability, because it must
+                # be possible to generate forced values
+                p = draw(nonzero_probs)
+            else:
+                # otherwise, this interval can have 0 probability
+                p = draw(st.one_of(st.just(0), nonzero_probs))
+            weights[IntervalSet([(a, b)])] = p
+
+        # re-normalize probabilities to sum to 1
+        total = sum(weights.values())
+        # invalid to have a weighting that disallows all possibilities
+        assume(total != 0)
+        weights = {k: v / total for k, v in weights.items()}
+        # float rounding error can cause the sum to fail a similar internal
+        # invariant here. This isn't an issue in practice because weights are an
+        # internal api and we use sane p values.
+        assume(sum(weights.values()) == 1)
     else:
         if use_min_value:
             min_value = draw(st.integers(max_value=forced))

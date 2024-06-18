@@ -1,3 +1,12 @@
+# UNDERLYING PROBLEM FOR TEST FAILIURES:
+# lexicographically smaller buffers don't lead to earlier choices via Sampler.
+# not sure if this is easily fixable in Sampler, but this is where I left things.
+
+# s = Sampler([0.015625, 0.0078125, 0.953125, 0.0078125, 0.015625])
+# print(s.sample(ConjectureData.for_buffer(b"\x01\x00"))) # 1
+# print(s.sample(ConjectureData.for_buffer(b"\x00\x01"))) # 2
+assert False # marker for me next time
+
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis/
 #
@@ -97,7 +106,7 @@ T = TypeVar("T")
 class IntegerKWargs(TypedDict):
     min_value: Optional[int]
     max_value: Optional[int]
-    weights: Optional[Sequence[float]]
+    weights: Optional[Dict[IntervalSet, float]]
     shrink_towards: int
 
 
@@ -1066,6 +1075,7 @@ def ir_value_permitted(value, ir_type, kwargs):
     if ir_type == "integer":
         min_value = kwargs["min_value"]
         max_value = kwargs["max_value"]
+        weights = kwargs["weights"]
         shrink_towards = kwargs["shrink_towards"]
         if min_value is not None and value < min_value:
             return False
@@ -1076,6 +1086,12 @@ def ir_value_permitted(value, ir_type, kwargs):
             value - shrink_towards
         ).bit_length() >= 128:
             return False
+
+        if weights is not None:
+            # values in an interval with 0 probability are not permitted
+            for iv, p in weights.items():
+                if value in iv and p == 0:
+                    return False
 
         return True
     elif ir_type == "float":
@@ -1121,7 +1137,7 @@ def ir_kwargs_key(ir_type, kwargs):
         return (
             kwargs["min_value"],
             kwargs["max_value"],
-            None if kwargs["weights"] is None else tuple(kwargs["weights"]),
+            None if kwargs["weights"] is None else tuple(kwargs["weights"].items()),
             kwargs["shrink_towards"],
         )
     return tuple(kwargs[key] for key in sorted(kwargs))
@@ -1238,7 +1254,7 @@ class PrimitiveProvider(abc.ABC):
         max_value: Optional[int] = None,
         *,
         # weights are for choosing an element index from a bounded range
-        weights: Optional[Sequence[float]] = None,
+        weights: Optional[Dict[IntervalSet, float]] = None,
         shrink_towards: int = 0,
         forced: Optional[int] = None,
         fake_forced: bool = False,
@@ -1404,40 +1420,89 @@ class HypothesisProvider(PrimitiveProvider):
         max_value: Optional[int] = None,
         *,
         # weights are for choosing an element index from a bounded range
-        weights: Optional[Sequence[float]] = None,
+        weights: Optional[Dict[IntervalSet, float]] = None,
         shrink_towards: int = 0,
         forced: Optional[int] = None,
         fake_forced: bool = False,
     ) -> int:
         assert self._cd is not None
 
-        if min_value is not None:
-            shrink_towards = max(min_value, shrink_towards)
-        if max_value is not None:
-            shrink_towards = min(max_value, shrink_towards)
-
-        # This is easy to build on top of our existing conjecture utils,
-        # and it's easy to build sampled_from and weighted_coin on this.
         if weights is not None:
             assert min_value is not None
             assert max_value is not None
 
-            sampler = Sampler(weights, observe=False)
-            gap = max_value - shrink_towards
+            # order weights by distance to shrink_towards
+            weights = dict(
+                sorted(
+                    weights.items(),
+                    key=lambda kv: (
+                        0
+                        if shrink_towards in kv[0]
+                        else max(
+                            abs(kv[0][0] - shrink_towards),
+                            abs(kv[0][-1] - shrink_towards),
+                        )
+                    ),
+                )
+            )
 
-            forced_idx = None
+            # forced interval index
+            forced_i = None
+            # index in that interval of the forced value
+            forced_n = None
             if forced is not None:
-                if forced >= shrink_towards:
-                    forced_idx = forced - shrink_towards
-                else:
-                    forced_idx = shrink_towards + gap - forced
-            idx = sampler.sample(self._cd, forced=forced_idx, fake_forced=fake_forced)
+                for i, interval in enumerate(weights):
+                    if forced in interval:
+                        forced_i = i
+                        forced_n = interval.index(forced)
+                        # TODO next: handling inverse shrink_towards for forced
+                        if shrink_towards < interval[0]:
+                            pass
+                        elif shrink_towards > interval[-1]:
+                            forced_n = interval.size - 1 - forced_n
+                        else:
+                            assert shrink_towards in interval
+                            shrink_towards_n = interval.index(shrink_towards)
+                            gap = interval.size - 1 - shrink_towards_n
+                            if forced_n >= shrink_towards_n:
+                                forced_n = forced_n - shrink_towards_n
+                            else:
+                                forced_n = shrink_towards_n + gap - forced_n
+                        break
+                # forced must be found inside the weights
+                assert forced_i is not None
 
-            # For range -2..2, interpret idx = 0..4 as [0, 1, 2, -1, -2]
-            if idx <= gap:
-                return shrink_towards + idx
+            sampler = Sampler(weights.values(), observe=False)
+            i = sampler.sample(self._cd, forced=forced_i, fake_forced=fake_forced)
+            # implicitly relying on dicts being ordered here for determinism
+            interval = list(weights)[i]
+
+            n = self._draw_bounded_integer(
+                0,
+                interval.size - 1,
+                forced=forced_n,
+                fake_forced=fake_forced,
+            )
+
+            if shrink_towards < interval[0]:
+                return interval[n]
+            if shrink_towards > interval[-1]:
+                return interval[interval.size - 1 - n]
+
+            assert shrink_towards in interval
+            shrink_towards = interval.index(shrink_towards)
+            gap = interval.size - 1 - shrink_towards
+            # For interval [-2, 2] and shrink_towards = 0, interpret n = 0..4
+            # as [0, 1, 2, -1, -2]
+            if n <= gap:
+                return interval[shrink_towards + n]
             else:
-                return shrink_towards - (idx - gap)
+                return interval[shrink_towards - (n - gap)]
+
+        if min_value is not None:
+            shrink_towards = max(min_value, shrink_towards)
+        if max_value is not None:
+            shrink_towards = min(max_value, shrink_towards)
 
         if min_value is None and max_value is None:
             return self._draw_unbounded_integer(forced=forced, fake_forced=fake_forced)
@@ -2044,7 +2109,7 @@ class ConjectureData:
         max_value: Optional[int] = None,
         *,
         # weights are for choosing an element index from a bounded range
-        weights: Optional[Sequence[float]] = None,
+        weights: Optional[Dict[IntervalSet, float]] = None,
         shrink_towards: int = 0,
         forced: Optional[int] = None,
         fake_forced: bool = False,
@@ -2054,9 +2119,15 @@ class ConjectureData:
         if weights is not None:
             assert min_value is not None
             assert max_value is not None
-            width = max_value - min_value + 1
-            assert width <= 255  # arbitrary practical limit
-            assert len(weights) == width
+            intervals = IntervalSet.union_all(weights.keys())
+
+            assert sum(weights.values()) == 1
+            assert len(weights) <= 255  # arbitrary practical limit
+            assert intervals.size == max_value - min_value + 1
+            # no overlapping intervals
+            assert intervals.size == sum(iv.size for iv in weights)
+            assert intervals[0] == min_value
+            assert intervals[-1] == max_value
 
         if forced is not None and (min_value is None or max_value is None):
             # We draw `forced=forced - shrink_towards` here internally. If that
@@ -2280,17 +2351,7 @@ class ConjectureData:
 
     def _pooled_kwargs(self, ir_type, kwargs):
         """Memoize common dictionary objects to reduce memory pressure."""
-        key = []
-        for k, v in kwargs.items():
-            if ir_type == "float" and k in ["min_value", "max_value"]:
-                # handle -0.0 vs 0.0, etc.
-                v = float_to_int(v)
-            elif ir_type == "integer" and k == "weights":
-                # make hashable
-                v = v if v is None else tuple(v)
-            key.append((k, v))
-
-        key = (ir_type, *sorted(key))
+        key = (ir_type, *ir_kwargs_key(ir_type, kwargs))
 
         try:
             return POOLED_KWARGS_CACHE[key]

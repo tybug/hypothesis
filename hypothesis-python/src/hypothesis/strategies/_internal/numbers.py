@@ -31,6 +31,7 @@ from hypothesis.internal.floats import (
     next_up_normal,
     width_smallest_normals,
 )
+from hypothesis.internal.intervalsets import IntervalSet
 from hypothesis.internal.validation import (
     check_type,
     check_valid_bound,
@@ -65,25 +66,23 @@ class IntegersStrategy(SearchStrategy):
         return f"integers({self.start}, {self.end})"
 
     def do_draw(self, data):
-        # For bounded integers, make the bounds and near-bounds more likely.
-        forced = None
+        weights = None
         if (
             self.end is not None
             and self.start is not None
             and self.end - self.start > 127
         ):
-            bits = data.draw_integer(0, 127)
-            forced = {
-                122: self.start,
-                123: self.start,
-                124: self.end,
-                125: self.end,
-                126: self.start + 1,
-                127: self.end - 1,
-            }.get(bits)
+            # for bounded integers, make the near-bounds more likely.
+            weights = {
+                IntervalSet([(self.start, self.start)]): 2 / 128,
+                IntervalSet([(self.start + 1, self.start + 1)]): 1 / 128,
+                IntervalSet([(self.start + 2, self.end - 2)]): 122 / 128,
+                IntervalSet([(self.end - 1, self.end - 1)]): 1 / 128,
+                IntervalSet([(self.end, self.end)]): 2 / 128,
+            }
 
         return data.draw_integer(
-            min_value=self.start, max_value=self.end, forced=forced
+            min_value=self.start, max_value=self.end, weights=weights
         )
 
     def filter(self, condition):

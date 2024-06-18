@@ -38,6 +38,7 @@ from hypothesis.internal.floats import (
     int_to_float,
     sign_aware_lte,
 )
+from hypothesis.internal.intervalsets import IntervalSet
 
 
 class PreviouslyUnseenBehaviour(HypothesisException):
@@ -158,7 +159,7 @@ def compute_max_children(ir_type, kwargs):
             n = max_value - min_value + 1
             # remove any values with a zero probability of being drawn (weight=0).
             if weights is not None:
-                n -= sum(weight == 0 for weight in weights)
+                n -= sum(interval.size for interval, p in weights.items() if p == 0)
             return n
 
         # hard case: only one bound was specified. Here we probe either upwards
@@ -275,10 +276,9 @@ def all_children(ir_type, kwargs):
                 yield from range(min_value, max_value + 1)
             else:
                 # skip any values with a corresponding weight of 0 (can never be drawn).
-                for weight, n in zip(weights, range(min_value, max_value + 1)):
-                    if weight == 0:
-                        continue
-                    yield n
+                yield from IntervalSet.union_all(
+                    interval for interval, p in weights.items() if p != 0
+                )
         else:
             # hard case: only one bound was specified. Here we probe either upwards
             # or downwards with our full 128 bit generation, but only half of these
