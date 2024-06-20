@@ -79,6 +79,14 @@ from hypothesis.internal.compat import (
     int_from_bytes,
     int_to_bytes,
 )
+from hypothesis.internal.floats import (
+    next_down,
+    next_up,
+    sign_aware_lte,
+    float_to_int,
+    int_to_float,
+)
+from hypothesis.internal import floats as flt
 from hypothesis.internal.conjecture.data import (
     ConjectureData,
     Status,
@@ -1321,12 +1329,19 @@ data_to_bounds: Mapping[
 ] = LRUReusedCache(BOUNDS_CACHE_SIZE)
 largest_overrun = 0
 
+# * A "soft" overrun is one which overruns largest_overrun and causes us to increase
+#   the random size we generate. We probe upwards instead of always generating
+#   BUFFER_SIZE for performance reasons.
+# * A "hard" overrun is one which overruns BUFFER_SIZE. There is no recovering from this.
 statistics = {
     "num_calls": 0,
-    "per_item_stats": []
+    "per_item_stats": [],
+    "num_soft_overruns": 0,
+    "num_hard_overruns": 0,
 }
 
 custom_mutator_called = False
+
 
 def num_mutations(*, min_size, max_size, random):
     # TODO tweak this distribution
@@ -1343,10 +1358,46 @@ def num_mutations(*, min_size, max_size, random):
     return size
 
 
+def random_float_between(min_value, max_value, smallest_nonzero_magnitude, *, random):
+    def from_range(a, b):
+        return random.randint(float_to_int(a), float_to_int(b))
+
+    # handle zeroes separately so smallest_nonzero_magnitude can think of
+    # itself as a complete interval (instead of a hole at ±0).
+    if sign_aware_lte(min_value, -0.0) and sign_aware_lte(-0.0, max_value):
+        return -0.0
+    if sign_aware_lte(min_value, 0.0) and sign_aware_lte(0.0, max_value):
+        return 0.0
+
+    if flt.is_negative(min_value):
+        if flt.is_negative(max_value):
+            # case: both negative.
+            max_point = min(max_value, -smallest_nonzero_magnitude)
+            # float_to_int increases as negative magnitude increases, so
+            # invert order.
+            f = from_range(max_point, min_value)
+        else:
+            # case: straddles midpoint (which is between -0.0 and 0.0).
+            # TODO use a more fair distribution than randomly picking between
+            # the two. this makes it equally likely to pick numbers on either
+            # side of 0 even if the interval is (-0.001, 999).
+            if random.randint(0, 1) == 0:
+                f = from_range(-smallest_nonzero_magnitude, min_value)
+            else:
+                f = from_range(smallest_nonzero_magnitude, max_value)
+    else:
+        # case: both positive.
+        min_point = max(min_value, smallest_nonzero_magnitude)
+        f = from_range(min_point, max_value)
+
+    return int_to_float(f)
+
+
 def custom_mutator(data, buffer_size, seed):
     # custom_mutator should be called by atheris exactly once per test case.
     global custom_mutator_called
-    assert not custom_mutator_called
+    # this assert actually fired when fuzzing hypothesis_jsonschema? not sure how yet.
+    # assert not custom_mutator_called
     custom_mutator_called = True
 
     stats = {}
@@ -1398,14 +1449,62 @@ def custom_mutator(data, buffer_size, seed):
         elif ir_type == "boolean":
             p = kwargs["p"]
             assert 0 < p < 1
+            forced = int(random.randint(0, 1))
+        elif ir_type == "bytes":
+            size = kwargs["size"]
+            forced = random.randbytes(size)
+        elif ir_type == "string":
+            intervals = kwargs["intervals"]
+            min_size = kwargs["min_size"]
+            max_size = kwargs["max_size"]
 
-            forced = random.random() < p
-        else:
-            # assert False, (ir_type, value)
-            # fully random replacement of the same size
-            size = end - start
-            replacement = random.randbytes(size)
+            if max_size is None or math.isinf(max_size):
+                # TODO tweak this value or use average_size-style calculation
+                # like we do in hypothesis
+                max_size = 50
 
+            size = random.randint(min_size, max_size)
+            forced = ""
+            for _ in range(size):
+                n = random.randint(0, intervals.size - 1)
+                forced += chr(intervals[n])
+        elif ir_type == "float":
+            min_value = kwargs["min_value"]
+            max_value = kwargs["max_value"]
+            allow_nan = kwargs["allow_nan"]
+            smallest_nonzero_mag = kwargs["smallest_nonzero_magnitude"]
+
+            def is_inf(value, *, sign):
+                return math.copysign(1.0, value) == sign and math.isinf(value)
+
+            # draw a "special" value (nan/inf/ninf) each with probability 0.5%,
+            # so total 1.5%
+            # TODO tweak this probability?
+            if allow_nan and random.randint(0, 199) == 0:
+                forced = math.nan
+            elif is_inf(min_value, sign=-1.0) and random.randint(0, 199) == 0:
+                forced = math.inf
+            elif is_inf(max_value, sign=1.0) and random.randint(0, 199) == 0:
+                forced = -math.inf
+            else:
+                min_val = min_value
+                max_val = max_value
+                if is_inf(min_value, sign=-1.0):
+                    min_val = next_up(min_value)
+                if is_inf(min_value, sign=1.0):
+                    min_val = next_down(min_value)
+                if is_inf(max_value, sign=-1.0):
+                    max_val = next_up(max_value)
+                if is_inf(max_value, sign=1.0):
+                    max_val = next_down(max_value)
+
+                assert not math.isinf(min_val), "assert1"
+                assert not math.isinf(max_val), "assert2"
+                assert sign_aware_lte(min_val, max_val), "assert3"
+
+                forced = random_float_between(
+                    min_value, max_value, smallest_nonzero_mag, random=random
+                )
         # value of the prefix doesn't matter since we're forcing the draw.
         cd = AtherisData(BUFFER_SIZE, prefix=bytes(BUFFER_SIZE), random=random)
         # overwrite the forced val in the kwargs
@@ -1414,15 +1513,26 @@ def custom_mutator(data, buffer_size, seed):
         replacement = cd.buffer
 
         after[i] = forced
-        stats["mutations"].append({"ir_type": ir_type, "before": value, "after": forced})
+        stats["mutations"].append(
+            {"ir_type": ir_type, "before": value, "after": forced}
+        )
         data = data[:start] + replacement + data[end:]
 
     if len(data) <= largest_overrun:
-        stats["overrun"] = True
+        stats["soft_overrun"] = True
+        statistics["num_soft_overruns"] += 1
         # generate random bytes up to double the largest overrun to ensure we grow
         # to the appropriate size for the test case.
         data += random.randbytes(largest_overrun * 2 - len(data))
         assert len(data) == largest_overrun * 2
+
+    # if we mutated to something over BUFFER_SIZE, throw away this attempt. we could
+    # try intelligent fixups but it's just not worth it when atheris will learn
+    # that the input is not leading to new coverage anyway.
+    if len(data) > BUFFER_SIZE:
+        stats["hard_overrun"] = True
+        statistics["num_hard_overruns"] += 1
+        data = b""
 
     stats["after"] = after
     statistics["num_calls"] += 1
@@ -1476,6 +1586,19 @@ class HypothesisHandle:
     def fuzz_with_atheris(self, **kwargs):
         import atheris
 
+        # defaults to 4096 in libfuzzer. we want the ability to grow up to BUFFER_SIZE.
+        kwargs["max_len"] = BUFFER_SIZE
+
+        # There are two reasonable ways to implement input reduction, and I don't
+        # know which one libfuzzer chooses:
+        #
+        # (1) check if generate inputs happen to be smaller with the same feature set
+        # (2) explicitly spend time searching for reduced inputs
+        #
+        # We only care about reducing inputs insofar as they help us avoid hard
+        # overruns. They don't give the same mutation benefit as in standard libfuzzer.
+        # So if libfuzzer does (2), we want to disable it. But if libfuzze does (1),
+        # leaving it enabled (the default) is still probably net positive.
         # kwargs["reduce_inputs"] = 0
 
         # atheris segfaults if we try giving it the empty list. Undoubtedly
