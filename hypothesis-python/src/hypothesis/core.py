@@ -11,6 +11,7 @@
 """This module provides the core primitives of Hypothesis, such as given."""
 from contextlib import contextmanager
 
+import tempfile
 import base64
 import contextlib
 import datetime
@@ -1614,6 +1615,9 @@ class HypothesisHandle:
             )
             corpus_directory.mkdir(exist_ok=True, parents=True)
             argv += [str(corpus_directory)]
+
+        temp_dir = tempfile.mkdtemp()
+        kwargs["artifact_prefix"] = f"{temp_dir}/"
         argv += [f"-{k}={v}" for k, v in kwargs.items()]
 
         fuzz_one_input = self._get_fuzz_target(use_atheris=True)
