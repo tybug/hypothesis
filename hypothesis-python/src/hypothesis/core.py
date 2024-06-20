@@ -11,6 +11,7 @@
 """This module provides the core primitives of Hypothesis, such as given."""
 from contextlib import contextmanager
 
+from pathlib import Path
 import tempfile
 import base64
 import contextlib
@@ -1588,7 +1589,7 @@ class HypothesisHandle:
             self.__cached_target = self._get_fuzz_target()
             return self.__cached_target
 
-    def fuzz_with_atheris(self, **kwargs):
+    def fuzz_with_atheris(self, *, warmstart=None, **kwargs):
         import atheris
 
         # defaults to 4096 in libfuzzer. we want the ability to grow up to BUFFER_SIZE.
@@ -1616,11 +1617,25 @@ class HypothesisHandle:
             corpus_directory.mkdir(exist_ok=True, parents=True)
             argv += [str(corpus_directory)]
 
+        warmstart_dir = None
+        if warmstart is not None:
+            warmstart_dir = Path(tempfile.mkdtemp())
+            # add another corpus directory. get_fuzz_target will handle writing
+            # warmstarted examples to this dir before invoking atheris, but we
+            # need to know this dir ahead of time to pass to atheris.Setup.
+
+            # -merge does not work here as that tries launching a subprocess,
+            # and we don't have an entrypoint for it (we could be invoked by
+            # arbitrary python code).
+            argv += [str(warmstart_dir)]
+
         temp_dir = tempfile.mkdtemp()
         kwargs["artifact_prefix"] = f"{temp_dir}/"
         argv += [f"-{k}={v}" for k, v in kwargs.items()]
 
-        fuzz_one_input = self._get_fuzz_target(use_atheris=True)
+        fuzz_one_input = self._get_fuzz_target(
+            use_atheris=True, warmstart=warmstart, warmstart_dir=warmstart_dir
+        )
         # TODO custom_crossover?
         atheris.Setup(
             argv, fuzz_one_input, custom_mutator=custom_mutator, custom_crossover=None
@@ -2011,7 +2026,7 @@ def given(
                 raise SKIP_BECAUSE_NO_EXAMPLES
 
         def _get_fuzz_target(
-            *, use_atheris=False
+            *, use_atheris=False, warmstart=None, warmstart_dir=None
         ) -> Callable[[Union[bytes, bytearray, memoryview, BinaryIO]], Optional[bytes]]:
             # Because fuzzing interfaces are very performance-sensitive, we use a
             # somewhat more complicated structure here.  `_get_fuzz_target()` is
@@ -2041,6 +2056,45 @@ def given(
             # it means that we saturate for common errors in long runs instead of
             # storing huge volumes of low-value data.
             minimal_failures: dict = {}
+
+            if warmstart is not None:
+                assert False # unfinished and needs work. keeping wip code around
+                assert warmstart_dir is not None
+                # what is our warmstart goal?
+                # generate n=warmstart examples normally from hypothesis and write
+                # the bytes that would have generated it to the corpus. how?
+                # we'll use the atheris provider
+                warmstarted = []
+
+                # hook a callback for the generated buffers
+                def warmstart_test(data):
+                    ret = test(data)
+                    # # this is sketchy, but we should be freezing data right after
+                    # # we call runner.test_function(data) anyway...
+                    # # e: turns out we don't need this because we're just accessing
+                    # # buffer, not ir_tree_nodes. may need in the future.
+                    # data.conjecture_data.freeze()
+                    warmstarted.append(data.conjecture_data.buffer)
+                    return ret
+
+                warmstart_settings = settings = Settings(
+                    parent=wrapped_test._hypothesis_internal_use_settings,
+                    deadline=None,
+                    max_examples=warmstart,
+                )
+                warmstart_state = StateForActualGivenExecution(
+                    stuff, warmstart_test, warmstart_settings, random, wrapped_test
+                )
+                warmstart_state.run_engine()
+
+                # TODO do a better job of persisting this to the db. we'll probably
+                # want dirs corpus/hash/warmstart and corpus/hash/coverage.
+                # Then if we have n warmstarted examples and a user requests
+                # warmstart=m < n, pick m from n randomly. If m >= n, generate
+                # m - n new ones and provide all of them.
+                for i, b in enumerate(warmstarted):
+                    with open(warmstart_dir / f"{i}", "wb+") as f:
+                        f.write(b)
 
             def fuzz_one_input(
                 buffer: Union[bytes, bytearray, memoryview, BinaryIO]
