@@ -54,6 +54,8 @@ from hypothesis._settings import (
     local_settings,
     settings as Settings,
 )
+from hypothesis.configuration import storage_directory
+from hypothesis.database import _hash
 from hypothesis.internal.cache import LRUReusedCache
 from hypothesis.control import BuildContext
 from hypothesis.errors import (
@@ -406,6 +408,7 @@ def _invalid(message, *, exc=InvalidArgument, test, given_kwargs):
         inner_test=test,
         get_fuzz_target=wrapped_test,
         given_kwargs=given_kwargs,
+        settings=None,
     )
     return wrapped_test
 
@@ -1563,6 +1566,7 @@ class HypothesisHandle:
     inner_test = attr.ib()
     _get_fuzz_target = attr.ib()
     _given_kwargs = attr.ib()
+    _settings = attr.ib()
 
     @property
     def fuzz_one_input(
@@ -1601,10 +1605,17 @@ class HypothesisHandle:
         # leaving it enabled (the default) is still probably net positive.
         # kwargs["reduce_inputs"] = 0
 
-        # atheris segfaults if we try giving it the empty list. Undoubtedly
-        # it expects argv[0] aka the invoked python file to exist, though I
-        # don't think it does anything with it.
-        argv = ["__main__"] + [f"-{k}={v}" for k, v in kwargs.items()]
+        # maintain argv[0] as the invoked python file, which seems to be the
+        # structure atheris expects. not doing so throws off arg order interpretation.
+        argv = ["__main__"]
+        if self._settings.database is not None:
+            corpus_directory = storage_directory(
+                "corpus", _hash(function_digest(self.inner_test))
+            )
+            corpus_directory.mkdir(exist_ok=True, parents=True)
+            argv += [str(corpus_directory)]
+        argv += [f"-{k}={v}" for k, v in kwargs.items()]
+
         fuzz_one_input = self._get_fuzz_target(use_atheris=True)
         # TODO custom_crossover?
         atheris.Setup(
@@ -2048,6 +2059,17 @@ def given(
                 except (StopTest, UnsatisfiedAssumption):
                     return None
                 except BaseException:
+                    data.freeze()
+                    # convert backend ir to buffer
+                    data = ConjectureData.for_ir_tree(data.examples.ir_tree_nodes)
+                    try:
+                        state.execute_once(data)
+                    except BaseException:
+                        pass
+                    else:
+                        # flaky, saved buffer will be wrong. what to do here? avoid
+                        # saving to db?
+                        pass
                     buffer = bytes(data.buffer)
                     known = minimal_failures.get(data.interesting_origin)
                     if settings.database is not None and (
@@ -2080,7 +2102,12 @@ def given(
         wrapped_test._hypothesis_internal_use_reproduce_failure = getattr(
             test, "_hypothesis_internal_use_reproduce_failure", None
         )
-        wrapped_test.hypothesis = HypothesisHandle(test, _get_fuzz_target, given_kwargs)
+        wrapped_test.hypothesis = HypothesisHandle(
+            inner_test=test,
+            get_fuzz_target=_get_fuzz_target,
+            given_kwargs=given_kwargs,
+            settings=wrapped_test._hypothesis_internal_use_settings,
+        )
         return wrapped_test
 
     return run_test_as_given
