@@ -1589,7 +1589,7 @@ class HypothesisHandle:
             self.__cached_target = self._get_fuzz_target()
             return self.__cached_target
 
-    def fuzz_with_atheris(self, *, warmstart=None, **kwargs):
+    def fuzz_with_atheris(self, *, warmstart=None, corpus_dir, **kwargs):
         import atheris
 
         # defaults to 4096 in libfuzzer. we want the ability to grow up to BUFFER_SIZE.
@@ -1610,7 +1610,9 @@ class HypothesisHandle:
         # maintain argv[0] as the invoked python file, which seems to be the
         # structure atheris expects. not doing so throws off arg order interpretation.
         argv = ["__main__"]
-        if self._settings.database is not None:
+        if corpus_dir is not None:
+            argv += [str(corpus_dir)]
+        elif self._settings.database is not None:
             corpus_directory = storage_directory(
                 "corpus", _hash(function_digest(self.inner_test))
             )
