@@ -1421,7 +1421,10 @@ def custom_mutator(data, buffer_size, seed):
     stats["overrun"] = False
 
     choices = list(bounds.keys())
-    num_mutations_ = num_mutations(min_size=1, max_size=len(choices), random=random)
+    # possibly 0 choices got made, in which case use 0 mutations.
+    num_mutations_ = num_mutations(
+        min_size=min(1, len(choices)), max_size=len(choices), random=random
+    )
     mutations = random.sample(range(len(choices)), num_mutations_)
     stats["num_mutations"] = len(mutations)
     stats["before"] = [v for (_, _, v) in bounds.values()]
