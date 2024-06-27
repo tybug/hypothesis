@@ -2060,7 +2060,7 @@ def given(
             minimal_failures: dict = {}
 
             if warmstart is not None:
-                assert False # unfinished and needs work. keeping wip code around
+                assert False  # unfinished and needs work. keeping wip code around
                 assert warmstart_dir is not None
                 # what is our warmstart goal?
                 # generate n=warmstart examples normally from hypothesis and write
