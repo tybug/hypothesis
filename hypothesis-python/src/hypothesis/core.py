@@ -1588,14 +1588,14 @@ class HypothesisHandle:
         try:
             return self.__cached_target  # type: ignore
         except AttributeError:
-            self.__cached_target = self._get_fuzz_target()
+            self.__cached_target = self._get_fuzz_target(args=(), kwargs={})
             return self.__cached_target
 
-    def fuzz_with_atheris(self, *, warmstart=None, corpus_dir, **kwargs):
+    def fuzz_with_atheris(self, *, kwargs, warmstart=None, corpus_dir, **_kwargs):
         import atheris
 
         # defaults to 4096 in libfuzzer. we want the ability to grow up to BUFFER_SIZE.
-        kwargs["max_len"] = BUFFER_SIZE
+        _kwargs["max_len"] = BUFFER_SIZE
 
         # There are two reasonable ways to implement input reduction, and I don't
         # know which one libfuzzer chooses:
@@ -1634,11 +1634,15 @@ class HypothesisHandle:
             argv += [str(warmstart_dir)]
 
         temp_dir = tempfile.mkdtemp()
-        kwargs["artifact_prefix"] = f"{temp_dir}/"
-        argv += [f"-{k}={v}" for k, v in kwargs.items()]
+        _kwargs["artifact_prefix"] = f"{temp_dir}/"
+        argv += [f"-{k}={v}" for k, v in _kwargs.items()]
 
         fuzz_one_input = self._get_fuzz_target(
-            use_atheris=True, warmstart=warmstart, warmstart_dir=warmstart_dir
+            args=(),
+            kwargs=kwargs,
+            use_atheris=True,
+            warmstart=warmstart,
+            warmstart_dir=warmstart_dir,
         )
         # TODO custom_crossover?
         atheris.Setup(
@@ -2030,7 +2034,7 @@ def given(
                 raise SKIP_BECAUSE_NO_EXAMPLES
 
         def _get_fuzz_target(
-            *, use_atheris=False, warmstart=None, warmstart_dir=None
+            *, args, kwargs, use_atheris=False, warmstart=None, warmstart_dir=None
         ) -> Callable[[Union[bytes, bytearray, memoryview, BinaryIO]], Optional[bytes]]:
             # Because fuzzing interfaces are very performance-sensitive, we use a
             # somewhat more complicated structure here.  `_get_fuzz_target()` is
@@ -2047,10 +2051,8 @@ def given(
             )
             random = get_random_for_wrapped_test(test, wrapped_test)
             _args, _kwargs, stuff = process_arguments_to_given(
-                wrapped_test, (), {}, given_kwargs, new_signature.parameters
+                wrapped_test, args, kwargs, given_kwargs, new_signature.parameters
             )
-            assert not _args
-            assert not _kwargs
             state = StateForActualGivenExecution(
                 stuff, test, settings, random, wrapped_test
             )
