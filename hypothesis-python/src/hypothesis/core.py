@@ -9,10 +9,6 @@
 # obtain one at https://mozilla.org/MPL/2.0/.
 
 """This module provides the core primitives of Hypothesis, such as given."""
-from contextlib import contextmanager
-
-from pathlib import Path
-import tempfile
 import base64
 import contextlib
 import datetime
@@ -20,13 +16,16 @@ import inspect
 import io
 import math
 import sys
+import tempfile
 import time
 import types
 import unittest
 import warnings
 import zlib
 from collections import defaultdict
+from contextlib import contextmanager
 from functools import partial
+from pathlib import Path
 from random import Random
 from typing import (
     TYPE_CHECKING,
@@ -36,13 +35,13 @@ from typing import (
     Coroutine,
     Hashable,
     List,
+    Mapping,
     Optional,
     Tuple,
     Type,
     TypeVar,
     Union,
     overload,
-    Mapping,
 )
 from unittest import TestCase
 
@@ -57,9 +56,8 @@ from hypothesis._settings import (
     settings as Settings,
 )
 from hypothesis.configuration import storage_directory
-from hypothesis.database import _hash
-from hypothesis.internal.cache import LRUReusedCache
 from hypothesis.control import BuildContext
+from hypothesis.database import _hash
 from hypothesis.errors import (
     DeadlineExceeded,
     DidNotReproduce,
@@ -74,6 +72,8 @@ from hypothesis.errors import (
     Unsatisfiable,
     UnsatisfiedAssumption,
 )
+from hypothesis.internal import floats as flt
+from hypothesis.internal.cache import LRUReusedCache
 from hypothesis.internal.compat import (
     PYPY,
     BaseExceptionGroup,
@@ -83,20 +83,12 @@ from hypothesis.internal.compat import (
     int_from_bytes,
     int_to_bytes,
 )
-from hypothesis.internal.floats import (
-    next_down,
-    next_up,
-    sign_aware_lte,
-    float_to_int,
-    int_to_float,
-)
-from hypothesis.internal import floats as flt
 from hypothesis.internal.conjecture.data import (
     ConjectureData,
-    Status,
-    IRTypeName,
     IRKWargsType,
     IRType,
+    IRTypeName,
+    Status,
 )
 from hypothesis.internal.conjecture.engine import (
     BUFFER_SIZE,
@@ -105,6 +97,7 @@ from hypothesis.internal.conjecture.engine import (
 )
 from hypothesis.internal.conjecture.junkdrawer import ensure_free_stackframes
 from hypothesis.internal.conjecture.shrinker import sort_key
+from hypothesis.internal.conjecture.utils import _calc_p_continue
 from hypothesis.internal.entropy import deterministic_PRNG
 from hypothesis.internal.escalation import (
     InterestingOrigin,
@@ -112,6 +105,13 @@ from hypothesis.internal.escalation import (
     escalate_hypothesis_internal_error,
     format_exception,
     get_trimmed_traceback,
+)
+from hypothesis.internal.floats import (
+    float_to_int,
+    int_to_float,
+    next_down,
+    next_up,
+    sign_aware_lte,
 )
 from hypothesis.internal.healthcheck import fail_health_check
 from hypothesis.internal.observability import (
@@ -155,7 +155,6 @@ from hypothesis.strategies._internal.strategies import (
     check_strategy,
 )
 from hypothesis.strategies._internal.utils import to_jsonable
-from hypothesis.internal.conjecture.utils import _calc_p_continue
 from hypothesis.vendor.pretty import RepresentationPrinter
 from hypothesis.version import __version__
 
