@@ -1633,8 +1633,6 @@ class HypothesisHandle:
             # arbitrary python code).
             argv += [str(warmstart_dir)]
 
-        temp_dir = tempfile.mkdtemp()
-        _kwargs["artifact_prefix"] = f"{temp_dir}/"
         argv += [f"-{k}={v}" for k, v in _kwargs.items()]
 
         fuzz_one_input = self._get_fuzz_target(
