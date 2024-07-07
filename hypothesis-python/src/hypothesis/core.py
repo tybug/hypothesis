@@ -1589,7 +1589,7 @@ class HypothesisHandle:
             self.__cached_target = self._get_fuzz_target(args=(), kwargs={})
             return self.__cached_target
 
-    def fuzz_with_atheris(self, *, kwargs, warmstart=None, corpus_dir, **_kwargs):
+    def fuzz_with_atheris(self, *, kwargs, warmstart=None, corpus_dir=None, **_kwargs):
         import atheris
 
         # defaults to 4096 in libfuzzer. we want the ability to grow up to BUFFER_SIZE.
