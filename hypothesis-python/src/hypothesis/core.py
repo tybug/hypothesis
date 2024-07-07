@@ -89,6 +89,8 @@ from hypothesis.internal.conjecture.data import (
     IRType,
     IRTypeName,
     Status,
+    bits_to_bytes,
+    BYTE_MASKS,
 )
 from hypothesis.internal.conjecture.engine import (
     BUFFER_SIZE,
@@ -1646,9 +1648,6 @@ class HypothesisHandle:
         atheris.Fuzz()
 
 
-BYTE_MASKS = [(1 << n) - 1 for n in range(8)]
-
-
 class AtherisData(ConjectureData):
     def draw_bits(
         self,
@@ -1660,7 +1659,7 @@ class AtherisData(ConjectureData):
         if n == 0:
             return 0
         assert n > 0
-        n_bytes = (n + 7) >> 3
+        n_bytes = bits_to_bytes(n)
         if self.index + n_bytes > len(self.prefix):
             global largest_overrun
             largest_overrun = len(self.prefix)
