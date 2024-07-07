@@ -1526,8 +1526,6 @@ def custom_mutator(data, buffer_size, seed):
         data = data[:start] + replacement + data[end:]
 
     if len(data) <= largest_overrun:
-        stats["soft_overrun"] = True
-        statistics["num_soft_overruns"] += 1
         # generate random bytes up to double the largest overrun to ensure we grow
         # to the appropriate size for the test case.
         data += random.randbytes(largest_overrun * 2 - len(data))
@@ -1667,6 +1665,7 @@ class AtherisData(ConjectureData):
         if self.index + n_bytes > len(self.prefix):
             global largest_overrun
             largest_overrun = len(self.prefix)
+            statistics["num_soft_overruns"] += 1
             self.mark_overrun()
 
         if forced is not None:
