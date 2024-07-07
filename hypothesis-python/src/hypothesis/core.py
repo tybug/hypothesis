@@ -1471,6 +1471,7 @@ def custom_mutator(data, buffer_size, seed):
                 # like we do in hypothesis
                 max_size = 50
 
+            # TODO more intelligent string mutation, choose subsets to modify
             size = random.randint(min_size, max_size)
             forced = ""
             for _ in range(size):
