@@ -1417,7 +1417,6 @@ def custom_mutator(data, buffer_size, seed):
         return random.randbytes(100)
 
     stats["mode"] = "mutate"
-    stats["overrun"] = False
 
     choices = list(bounds.keys())
     # possibly 0 choices got made, in which case use 0 mutations.
