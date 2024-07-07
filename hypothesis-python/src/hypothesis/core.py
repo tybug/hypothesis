@@ -1474,7 +1474,15 @@ def custom_mutator(data, buffer_size, seed):
             size = random.randint(min_size, max_size)
             forced = ""
             for _ in range(size):
-                n = random.randint(0, intervals.size - 1)
+                # bias towards first 256 characters, which is ascii range for the
+                # default st.text()
+                if intervals.size > 256:
+                    if random.random() < 0.2:
+                        n = random.randint(256, intervals.size - 1)
+                    else:
+                        n = random.randint(0, 255)
+                else:
+                    n = random.randint(0, intervals.size - 1)
                 forced += chr(intervals[n])
         elif ir_type == "float":
             min_value = kwargs["min_value"]
