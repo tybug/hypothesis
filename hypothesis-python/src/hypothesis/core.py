@@ -91,6 +91,7 @@ from hypothesis.internal.conjecture.data import (
     Status,
     bits_to_bytes,
     BYTE_MASKS,
+    DRAW_STRING_DEFAULT_MAX_SIZE,
 )
 from hypothesis.internal.conjecture.engine import (
     BUFFER_SIZE,
@@ -1340,28 +1341,31 @@ largest_overrun = 0
 #   BUFFER_SIZE for performance reasons.
 # * A "hard" overrun is one which overruns BUFFER_SIZE. There is no recovering from this.
 statistics = {
-    "num_calls": 0,
     "per_item_stats": [],
+    "num_calls": 0,
     "num_soft_overruns": 0,
     "num_hard_overruns": 0,
+    "time_mutating": 0,
 }
-
+track_per_item_stats = False
 custom_mutator_called = False
+print_stats_at = 25_000
+stats_printed = True # set to False to print stats at print_stats_at calls
 
-
-def num_mutations(*, min_size, max_size, random):
-    # TODO tweak this distribution
-    average_size = min(
-        max(min_size * 1.3, min_size + 3),
-        0.5 * (min_size + max_size),
-    )
-    # print(f"{min_size=}, {average_size=}, {max_size=}")
-
+def _size(*, min_size, max_size, average_size, random):
     p_continue = _calc_p_continue(average_size - min_size, max_size - min_size)
     size = min_size
     while random.random() < p_continue and size < max_size:
         size += 1
     return size
+
+def num_mutations(*, min_size, max_size, random):
+    # TODO tweak this distribution?
+    average_size = min(
+        max(min_size * 1.3, min_size + 3),
+        0.5 * (min_size + max_size),
+    )
+    return _size(min_size=min_size, max_size=max_size, average_size=average_size, random=random)
 
 
 def random_float_between(min_value, max_value, smallest_nonzero_magnitude, *, random):
@@ -1400,8 +1404,10 @@ def random_float_between(min_value, max_value, smallest_nonzero_magnitude, *, ra
 
 
 def custom_mutator(data, buffer_size, seed):
+    t_start = time.time()
+    statistics["num_calls"] += 1
     # custom_mutator should be called by atheris exactly once per test case.
-    global custom_mutator_called
+    global custom_mutator_called, stats_printed
     # this assert actually fired when fuzzing hypothesis_jsonschema? not sure how yet.
     # assert not custom_mutator_called
     custom_mutator_called = True
@@ -1417,8 +1423,8 @@ def custom_mutator(data, buffer_size, seed):
         # ramp up to buffer_size or pick a weighted length from [0, buffer_size]?
         # returning randbytes(buffer_size) probably has performance implications.
         return random.randbytes(100)
-
-    stats["mode"] = "mutate"
+    if track_per_item_stats:
+        stats["mode"] = "mutate"
 
     choices = list(bounds.keys())
     # possibly 0 choices got made, in which case use 0 mutations.
@@ -1426,10 +1432,11 @@ def custom_mutator(data, buffer_size, seed):
         min_size=min(1, len(choices)), max_size=len(choices), random=random
     )
     mutations = random.sample(range(len(choices)), num_mutations_)
-    stats["num_mutations"] = len(mutations)
-    stats["before"] = [v for (_, _, v) in bounds.values()]
-    stats["mutations"] = []
-    after = [v for (_, _, v) in bounds.values()]
+    if track_per_item_stats:
+        stats["num_mutations"] = len(mutations)
+        stats["before"] = [v for (_, _, v) in bounds.values()]
+        stats["mutations"] = []
+        after = [v for (_, _, v) in bounds.values()]
 
     for i in mutations:
         start, end = choices[i]
@@ -1466,13 +1473,17 @@ def custom_mutator(data, buffer_size, seed):
             min_size = kwargs["min_size"]
             max_size = kwargs["max_size"]
 
-            if max_size is None or math.isinf(max_size):
-                # TODO tweak this value or use average_size-style calculation
-                # like we do in hypothesis
-                max_size = 50
+            if max_size is None:
+                max_size = DRAW_STRING_DEFAULT_MAX_SIZE
+
+            # copied from HypothesisProvider.draw_string
+            average_size = min(
+                max(min_size * 2, min_size + 5),
+                0.5 * (min_size + max_size),
+            )
+            size = _size(min_size=min_size, max_size=max_size, average_size=average_size, random=random)
 
             # TODO more intelligent string mutation, choose subsets to modify
-            size = random.randint(min_size, max_size)
             forced = ""
             for _ in range(size):
                 # bias towards first 256 characters, which is ascii range for the
@@ -1529,10 +1540,11 @@ def custom_mutator(data, buffer_size, seed):
         getattr(cd, f"draw_{ir_type}")(**kwargs)
         replacement = cd.buffer
 
-        after[i] = forced
-        stats["mutations"].append(
-            {"ir_type": ir_type, "before": value, "after": forced}
-        )
+        if track_per_item_stats:
+            after[i] = forced
+            stats["mutations"].append(
+                {"ir_type": ir_type, "before": value, "after": forced}
+            )
         data = data[:start] + replacement + data[end:]
 
     if len(data) <= largest_overrun:
@@ -1545,17 +1557,22 @@ def custom_mutator(data, buffer_size, seed):
     # try intelligent fixups but it's just not worth it when atheris will learn
     # that the input is not leading to new coverage anyway.
     if len(data) > BUFFER_SIZE:
-        stats["hard_overrun"] = True
+        if track_per_item_stats:
+            stats["hard_overrun"] = True
         statistics["num_hard_overruns"] += 1
         data = b""
 
-    stats["after"] = after
-    statistics["num_calls"] += 1
-    statistics["per_item_stats"].append(stats)
+    statistics["time_mutating"] += time.time() - t_start
 
-    # import json
-    # print("-- mutate called --")
-    # print(json.dumps(stats, indent=2))
+    if track_per_item_stats:
+        stats["after"] = after
+        statistics["per_item_stats"].append(stats)
+
+    if statistics["num_calls"] > print_stats_at and not stats_printed:
+        import json
+        print("-- run statistics --")
+        print(json.dumps(statistics, indent=2))
+        stats_printed = True
     return data
 
 
