@@ -1350,7 +1350,7 @@ statistics = {
 track_per_item_stats = False
 custom_mutator_called = False
 print_stats_at = 25_000
-stats_printed = True # set to False to print stats at print_stats_at calls
+stats_printed = True # set to True to disable printing entirely
 
 def _size(*, min_size, max_size, average_size, random):
     p_continue = _calc_p_continue(average_size - min_size, max_size - min_size)
@@ -1484,6 +1484,7 @@ def custom_mutator(data, buffer_size, seed):
             size = _size(min_size=min_size, max_size=max_size, average_size=average_size, random=random)
 
             # TODO more intelligent string mutation, choose subsets to modify
+            # TODO apply similar logic to draw_bytes
             forced = ""
             for _ in range(size):
                 # bias towards first 256 characters, which is ascii range for the
