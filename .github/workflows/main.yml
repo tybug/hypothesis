@@ -49,9 +49,15 @@ jobs:
           - check-py313-cover
           - check-py313-nocover
           - check-py313-niche
-          # - check-py314-cover
-          # - check-py314-nocover
-          # - check-py314-niche
+          # - check-py313t-cover
+          # - check-py313t-nocover
+          # - check-py313t-niche
+          - check-py314-cover
+          - check-py314-nocover
+          - check-py314-niche
+          # - check-py314t-cover
+          # - check-py314t-nocover
+          # - check-py314t-niche
           - check-quality
           ## Skip all the (inactive/old) Rust and Ruby tests pending fixes
           # - lint-ruby
@@ -67,15 +73,16 @@ jobs:
           - check-py39-pytest46
           - check-py39-pytest54
           - check-pytest62
+          - check-django50
           - check-django42
-          - check-django41
-          - check-django32
+          - check-pandas22
+          - check-pandas21
           - check-pandas20
           - check-pandas15
           - check-pandas14
           - check-pandas13
-          - check-pandas12
-          - check-pandas11
+          - check-py39-pandas12
+          - check-py39-pandas11
           # - check-crosshair-cover
           # - check-crosshair-nocover
           # - check-crosshair-niche
@@ -163,6 +170,7 @@ jobs:
       if: matrix.python.architecture
       # See https://github.com/pandas-dev/pandas/issues/54979
       run: |
+        (Get-Content .\requirements\coverage.txt) -replace 'numpy==[0-9.]+', 'numpy==1.26.4' | Out-File .\requirements\coverage.txt
         (Get-Content .\requirements\coverage.txt) -replace 'pandas==[0-9.]+', 'pandas==2.0.3' | Out-File .\requirements\coverage.txt
         (Get-Content .\requirements\coverage.txt) -replace 'pyarrow==[0-9.]+', '# omitted' | Out-File .\requirements\coverage.txt
     - name: Install dependencies
@@ -211,9 +219,9 @@ jobs:
       NODE_VERSION: 18
       # Note that the versions below must be updated in sync; we've automated
       # that with `update_pyodide_versions()` in our weekly cronjob.
-      PYODIDE_VERSION: 0.25.1
-      PYTHON_VERSION: 3.11.3
-      EMSCRIPTEN_VERSION: 3.1.46
+      PYODIDE_VERSION: 0.26.1
+      PYTHON_VERSION: 3.12.1
+      EMSCRIPTEN_VERSION: 3.1.58
     steps:
       - uses: actions/checkout@v3
         with:
@@ -233,7 +241,7 @@ jobs:
           actions-cache-folder: emsdk-cache
       - name: Build
         run: |
-          pip install "pydantic<2" pyodide-build==$PYODIDE_VERSION
+          pip install pyodide-build==$PYODIDE_VERSION
           cd hypothesis-python/
           CFLAGS=-g2 LDFLAGS=-g2 pyodide build
       - name: Set up Pyodide venv and install dependencies
@@ -250,7 +258,11 @@ jobs:
       - name: Run tests
         run: |
           source .venv-pyodide/bin/activate
-          python -m pytest -p no:cacheprovider hypothesis-python/tests/cover
+          # pyodide can't run multiple processes internally, so parallelize explicitly over
+          # discovered test files instead (20 at a time)
+          TEST_FILES=$(python -m pytest -p no:cacheprovider --setup-plan hypothesis-python/tests/cover | grep ^hypothesis-python/ | cut -d " " -f 1)
+          parallel --max-procs 100% --max-args 20 --keep-order --line-buffer \
+            python -m pytest -p no:cacheprovider <<< $TEST_FILES
 
   deploy:
     if: "github.event_name == 'push' && github.repository == 'HypothesisWorks/hypothesis'"

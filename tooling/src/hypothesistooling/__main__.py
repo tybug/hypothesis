@@ -269,22 +269,35 @@ def compile_requirements(*, upgrade=False):
 
 def update_python_versions():
     install.ensure_python(PYTHONS[ci_version])
-    cmd = "~/.cache/hypothesis-build-runtimes/pyenv/bin/pyenv install --list"
-    result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE).stdout.decode()
+    where = os.path.expanduser("~/.cache/hypothesis-build-runtimes/pyenv/")
+    subprocess.run(
+        "git fetch && git reset --hard origin/master",
+        cwd=where,
+        shell=True,
+        capture_output=True,
+    )
+    cmd = "bin/pyenv install --list"
+    result = subprocess.run(
+        cmd, shell=True, stdout=subprocess.PIPE, cwd=where
+    ).stdout.decode()
     # pyenv reports available versions in chronological order, so we keep the newest
     # *unless* our current ends with a digit (is stable) and the candidate does not.
-    stable = re.compile(r".*3\.\d+.\d+$")
+    # (plus some special cases for the `t` suffix for free-threading builds)
+    stable = re.compile(r".*3\.\d+.\d+t?$")
     min_minor_version = re.search(
         r'python_requires=">= ?3.(\d+)"',
         Path("hypothesis-python/setup.py").read_text(encoding="utf-8"),
     ).group(1)
     best = {}
     for line in map(str.strip, result.splitlines()):
-        if m := re.match(r"(?:pypy)?3\.(?:[789]|\d\d)", line):
+        if m := re.match(r"(?:pypy)?3\.(?:[789]|\d\dt?)", line):
             key = m.group()
-            if stable.match(line) or not stable.match(best.get(key, line)):
-                if int(key.split(".")[-1]) >= int(min_minor_version):
-                    best[key] = line
+            if (
+                (stable.match(line) or not stable.match(best.get(key, line)))
+                and int(key.split(".")[-1].rstrip("t")) >= int(min_minor_version)
+                and key.endswith("t") == line.endswith(("t", "t-dev"))
+            ):
+                best[key] = line
 
     if best == PYTHONS:
         return
@@ -308,20 +321,24 @@ def update_python_versions():
 
 def update_pyodide_versions():
     vers_re = r"(\d+\.\d+\.\d+)"
-    pyodide_version = max(
-        # Don't just pick the most recent version; find the highest stable version.
-        re.findall(
-            f"pyodide_build-{vers_re}-py3-none-any.whl",  # excludes pre-releases
-            requests.get("https://pypi.org/simple/pyodide-build/").text,
-        ),
-        key=lambda version: tuple(int(x) for x in version.split(".")),
+    all_versions = re.findall(
+        f"pyodide_build-{vers_re}-py3-none-any.whl",  # excludes pre-releases
+        requests.get("https://pypi.org/simple/pyodide-build/").text,
     )
-    makefile_url = f"https://raw.githubusercontent.com/pyodide/pyodide/{pyodide_version}/Makefile.envs"
-    python_version, emscripten_version = re.search(
-        rf"export PYVERSION \?= {vers_re}\nexport PYODIDE_EMSCRIPTEN_VERSION \?= {vers_re}\n",
-        requests.get(makefile_url).text,
-    ).groups()
-
+    for pyodide_version in sorted(
+        # Don't just pick the most recent version; find the highest stable version.
+        set(all_versions),
+        key=lambda version: tuple(int(x) for x in version.split(".")),
+        reverse=True,
+    ):
+        makefile_url = f"https://raw.githubusercontent.com/pyodide/pyodide/{pyodide_version}/Makefile.envs"
+        match = re.search(
+            rf"export PYVERSION \?= {vers_re}\nexport PYODIDE_EMSCRIPTEN_VERSION \?= {vers_re}\n",
+            requests.get(makefile_url).text,
+        )
+        if match is not None:
+            python_version, emscripten_version = match.groups()
+            break
     ci_file = tools.ROOT / ".github/workflows/main.yml"
     config = ci_file.read_text(encoding="utf-8")
     for name, var in [
@@ -431,9 +448,11 @@ PYTHONS = {
     "3.9": "3.9.19",
     "3.10": "3.10.14",
     "3.11": "3.11.9",
-    "3.12": "3.12.3",
-    "3.13": "3.13.0b1",
+    "3.12": "3.12.4",
+    "3.13": "3.13.0b3",
+    "3.13t": "3.13t-dev",
     "3.14": "3.14-dev",
+    "3.14t": "3.14t-dev",
     "pypy3.8": "pypy3.8-7.3.11",
     "pypy3.9": "pypy3.9-7.3.16",
     "pypy3.10": "pypy3.10-7.3.16",
@@ -493,11 +512,13 @@ standard_tox_task("py39-pytest46", py="3.9")
 standard_tox_task("py39-pytest54", py="3.9")
 standard_tox_task("pytest62")
 
-for n in [32, 41, 42]:
+for n in [42, 50]:
     standard_tox_task(f"django{n}")
 
-for n in [11, 12, 13, 14, 15, 20]:
+for n in [13, 14, 15, 20, 21, 22]:
     standard_tox_task(f"pandas{n}")
+standard_tox_task("py39-pandas11", py="3.9")
+standard_tox_task("py39-pandas12", py="3.9")
 
 for kind in ("cover", "nocover", "niche"):
     standard_tox_task(f"crosshair-{kind}")

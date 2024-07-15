@@ -18,12 +18,13 @@ import pytest
 
 from hypothesis import given, settings, strategies as st
 from hypothesis.database import InMemoryExampleDatabase
-from hypothesis.errors import InvalidArgument
+from hypothesis.errors import Flaky, HypothesisException, InvalidArgument
 from hypothesis.internal.compat import int_to_bytes
 from hypothesis.internal.conjecture.data import (
     AVAILABLE_PROVIDERS,
     ConjectureData,
     PrimitiveProvider,
+    realize,
 )
 from hypothesis.internal.conjecture.engine import ConjectureRunner
 from hypothesis.internal.floats import SIGNALING_NAN
@@ -354,3 +355,76 @@ def test_case_lifetime():
             <= test_case_lifetime_init_count
             <= test_function_count + 10
         )
+
+
+def test_flaky_with_backend():
+    with temp_register_backend("trivial", TrivialProvider):
+
+        calls = 0
+
+        @given(st.integers())
+        @settings(backend="trivial", database=None)
+        def test_function(n):
+            nonlocal calls
+            calls += 1
+            assert n != calls % 2
+
+        with pytest.raises(Flaky):
+            test_function()
+
+
+class BadRealizeProvider(TrivialProvider):
+    def realize(self, value):
+        return None
+
+
+def test_bad_realize():
+    with temp_register_backend("bad_realize", BadRealizeProvider):
+
+        @given(st.integers())
+        @settings(backend="bad_realize")
+        def test_function(n):
+            pass
+
+        with pytest.raises(
+            HypothesisException,
+            match="expected .* from BadRealizeProvider.realize",
+        ):
+            test_function()
+
+
+class RealizeProvider(TrivialProvider):
+    avoid_realization = True
+
+    def realize(self, value):
+        if isinstance(value, int):
+            return 42
+        return value
+
+
+def test_realize():
+    with temp_register_backend("realize", RealizeProvider):
+
+        values = []
+
+        @given(st.integers())
+        @settings(backend="realize")
+        def test_function(n):
+            values.append(realize(n))
+
+        test_function()
+
+        assert all(n == 42 for n in values)
+
+
+def test_realize_dependent_draw():
+    with temp_register_backend("realize", RealizeProvider):
+
+        @given(st.data())
+        @settings(backend="realize")
+        def test_function(data):
+            n1 = data.draw(st.integers())
+            n2 = data.draw(st.integers(n1, n1 + 10))
+            assert n1 <= n2
+
+        test_function()

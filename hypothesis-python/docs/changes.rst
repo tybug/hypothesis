@@ -18,6 +18,148 @@ Hypothesis 6.x
 
     .. include:: ../RELEASE.rst
 
+.. _v6.106.1:
+
+--------------------
+6.106.1 - 2024-07-12
+--------------------
+
+This patch improves our pretty-printer (:issue:`4037`).
+
+It also fixes the codemod for ``HealthCheck.all()`` from
+:ref:`version 6.72 <v6.72.0>`, which was instead trying to
+fix ``Healthcheck.all()`` - note the lower-case ``c``!
+Since our tests had the same typo, it all looked good...
+until :issue:`4030`.
+
+.. _v6.106.0:
+
+--------------------
+6.106.0 - 2024-07-12
+--------------------
+
+This release improves support for unions of :pypi:`numpy` dtypes such as
+``np.float64 | np.complex128`` in :func:`~hypothesis.strategies.from_type`
+and :func:`~hypothesis.extra.numpy.arrays` (:issue:`4041`).
+
+.. _v6.105.2:
+
+--------------------
+6.105.2 - 2024-07-12
+--------------------
+
+This patch improves the reporting of certain flaky errors.
+
+.. _v6.105.1:
+
+--------------------
+6.105.1 - 2024-07-07
+--------------------
+
+This patch iterates on our experimental support for alternative backends (:ref:`alternative-backends`). See :pull:`4029` for details.
+
+.. _v6.105.0:
+
+--------------------
+6.105.0 - 2024-07-04
+--------------------
+
+This release improves support for Django 5.0, and drops support for end-of-life Django versions (< 4.2).
+
+Thanks to Joshua Munn for this contribution.
+
+.. _v6.104.4:
+
+--------------------
+6.104.4 - 2024-07-04
+--------------------
+
+Clean up internal cache implementation.
+
+.. _v6.104.3:
+
+--------------------
+6.104.3 - 2024-07-04
+--------------------
+
+This patch updates our autoformatting tools, improving our code style without any API changes.
+
+.. _v6.104.2:
+
+--------------------
+6.104.2 - 2024-06-29
+--------------------
+
+This patch fixes an issue when realizing symbolics with our experimental :obj:`~hypothesis.settings.backend` setting.
+
+.. _v6.104.1:
+
+--------------------
+6.104.1 - 2024-06-25
+--------------------
+
+Improves internal test coverage.
+
+.. _v6.104.0:
+
+--------------------
+6.104.0 - 2024-06-24
+--------------------
+
+This release adds strategies for Django's ``ModelChoiceField`` and
+``ModelMultipleChoiceField`` (:issue:`4010`).
+
+Thanks to Joshua Munn for this contribution.
+
+.. _v6.103.5:
+
+--------------------
+6.103.5 - 2024-06-24
+--------------------
+
+Fixes and reinstates full coverage of internal tests, which was accidentally
+disabled in :pull:`3935`.
+
+Closes :issue:`4003`.
+
+.. _v6.103.4:
+
+--------------------
+6.103.4 - 2024-06-24
+--------------------
+
+This release prevents a race condition inside internal cache implementation.
+
+.. _v6.103.3:
+
+--------------------
+6.103.3 - 2024-06-24
+--------------------
+
+This patch updates our vendored `list of top-level domains <https://www.iana.org/domains/root/db>`__,
+which is used by the provisional :func:`~hypothesis.provisional.domains` strategy.
+
+.. _v6.103.2:
+
+--------------------
+6.103.2 - 2024-06-14
+--------------------
+
+This patch improves our deduplication tracking across all strategies (:pull:`4007`). Hypothesis is now less likely to generate the same input twice.
+
+.. _v6.103.1:
+
+--------------------
+6.103.1 - 2024-06-05
+--------------------
+
+Account for time spent in garbage collection during tests, to avoid
+flaky ``DeadlineExceeded`` errors as seen in :issue:`3975`.
+
+Also fixes overcounting of stateful run times,
+a minor observability bug dating to :ref:`version 6.98.9 <v6.98.9>`
+(:pull:`3890`).
+
 .. _v6.103.0:
 
 --------------------
