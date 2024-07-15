@@ -2013,7 +2013,7 @@ class ConjectureData:
         # We want the top level example to have depth 0, so we start
         # at -1.
         self.depth = -1
-        self.__example_record = ExampleRecord()
+        self._example_record = ExampleRecord()
 
         # Slice indices for discrete reportable parts that which-parts-matter can
         # try varying, to report if the minimal example always fails anyway.
@@ -2118,7 +2118,7 @@ class ConjectureData:
             self.observer.draw_integer(
                 value, kwargs=kwargs, was_forced=forced is not None and not fake_forced
             )
-            self.__example_record.record_ir_draw(
+            self._example_record.record_ir_draw(
                 "integer",
                 value,
                 kwargs=kwargs,
@@ -2175,7 +2175,7 @@ class ConjectureData:
             self.observer.draw_float(
                 value, kwargs=kwargs, was_forced=forced is not None and not fake_forced
             )
-            self.__example_record.record_ir_draw(
+            self._example_record.record_ir_draw(
                 "float",
                 value,
                 kwargs=kwargs,
@@ -2217,7 +2217,7 @@ class ConjectureData:
             self.observer.draw_string(
                 value, kwargs=kwargs, was_forced=forced is not None and not fake_forced
             )
-            self.__example_record.record_ir_draw(
+            self._example_record.record_ir_draw(
                 "string",
                 value,
                 kwargs=kwargs,
@@ -2253,7 +2253,7 @@ class ConjectureData:
             self.observer.draw_bytes(
                 value, kwargs=kwargs, was_forced=forced is not None and not fake_forced
             )
-            self.__example_record.record_ir_draw(
+            self._example_record.record_ir_draw(
                 "bytes",
                 value,
                 kwargs=kwargs,
@@ -2295,7 +2295,7 @@ class ConjectureData:
             self.observer.draw_boolean(
                 value, kwargs=kwargs, was_forced=forced is not None and not fake_forced
             )
-            self.__example_record.record_ir_draw(
+            self._example_record.record_ir_draw(
                 "boolean",
                 value,
                 kwargs=kwargs,
@@ -2464,7 +2464,7 @@ class ConjectureData:
         # to fix with this check.
         if self.depth > self.max_depth:
             self.max_depth = self.depth
-        self.__example_record.start_example(label)
+        self._example_record.start_example(label)
         self.labels_for_structure_stack.append({label})
 
     def stop_example(self, *, discard: bool = False) -> None:
@@ -2474,7 +2474,7 @@ class ConjectureData:
             self.has_discards = True
         self.depth -= 1
         assert self.depth >= -1
-        self.__example_record.stop_example(discard=discard)
+        self._example_record.stop_example(discard=discard)
 
         labels_for_structure = self.labels_for_structure_stack.pop()
 
@@ -2515,7 +2515,7 @@ class ConjectureData:
     def examples(self) -> Examples:
         assert self.frozen
         if self.__examples is None:
-            self.__examples = Examples(record=self.__example_record, blocks=self.blocks)
+            self.__examples = Examples(record=self._example_record, blocks=self.blocks)
         return self.__examples
 
     def freeze(self) -> None:
@@ -2530,7 +2530,7 @@ class ConjectureData:
         while self.depth >= 0:
             self.stop_example()
 
-        self.__example_record.freeze()
+        self._example_record.freeze()
 
         self.frozen = True
 
@@ -2618,7 +2618,7 @@ class ConjectureData:
         buf = bytes(buf)
         result = int_from_bytes(buf)
 
-        self.__example_record.draw_bits()
+        self._example_record.draw_bits()
 
         initial = self.index
 
