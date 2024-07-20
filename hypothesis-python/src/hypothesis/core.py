@@ -1397,10 +1397,18 @@ def _size(*, min_size, max_size, average_size, random):
 def num_mutations(*, min_size, max_size, random):
     # TODO tweak this distribution?
     average_size = min(
-        max(min_size * 1.3, min_size + 3),
-        0.5 * (min_size + max_size),
+        max(
+            min_size * 1.3,
+            min_size + 3,
+            # for targets with a large amount of nodes, mutate 10% of them on average.
+            # otherwise we would mutate basically nothing for larger nodes
+            0.1 * (min_size + max_size),
+        ),
+        0.5 * (min_size + max_size)
     )
-    return _size(min_size=min_size, max_size=max_size, average_size=average_size, random=random)
+    return _size(
+        min_size=min_size, max_size=max_size, average_size=average_size, random=random
+    )
 
 
 def random_float_between(min_value, max_value, smallest_nonzero_magnitude, *, random):
@@ -1522,7 +1530,12 @@ def custom_mutator(data, buffer_size, seed):
                 max(min_size * 2, min_size + 5),
                 0.5 * (min_size + max_size),
             )
-            size = _size(min_size=min_size, max_size=max_size, average_size=average_size, random=random)
+            size = _size(
+                min_size=min_size,
+                max_size=max_size,
+                average_size=average_size,
+                random=random,
+            )
 
             # TODO more intelligent string mutation, choose subsets to modify
             # TODO apply similar logic to draw_bytes
