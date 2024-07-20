@@ -1402,7 +1402,7 @@ def num_mutations(*, min_size, max_size, random):
             min_size + 3,
             # for targets with a large amount of nodes, mutate 10% of them on average.
             # otherwise we would mutate basically nothing for larger nodes
-            0.1 * (min_size + max_size),
+            0.3 * (min_size + max_size),
         ),
         0.5 * (min_size + max_size)
     )
