@@ -1438,6 +1438,12 @@ def random_float_between(min_value, max_value, smallest_nonzero_magnitude, *, ra
     return int_to_float(f)
 
 
+def _make_serializable(ir_value):
+    if type(ir_value) is bytes:
+        return str(ir_value)
+    return ir_value
+
+
 def custom_mutator(data, buffer_size, seed):
     t_start = time.time()
     statistics["num_calls"] += 1
@@ -1469,9 +1475,9 @@ def custom_mutator(data, buffer_size, seed):
     mutations = random.sample(range(len(choices)), num_mutations_)
     if track_per_item_stats:
         stats["num_mutations"] = len(mutations)
-        stats["before"] = [v for (_, _, v) in bounds.values()]
+        stats["before"] = [_make_serializable(v) for (_, _, v) in bounds.values()]
         stats["mutations"] = []
-        after = [v for (_, _, v) in bounds.values()]
+        after = [_make_serializable(v) for (_, _, v) in bounds.values()]
 
     for i in mutations:
         start, end = choices[i]
@@ -1577,9 +1583,13 @@ def custom_mutator(data, buffer_size, seed):
         replacement = cd.buffer
 
         if track_per_item_stats:
-            after[i] = forced
+            after[i] = _make_serializable(forced)
             stats["mutations"].append(
-                {"ir_type": ir_type, "before": value, "after": forced}
+                {
+                    "ir_type": ir_type,
+                    "before": _make_serializable(value),
+                    "after": _make_serializable(forced),
+                }
             )
         data = data[:start] + replacement + data[end:]
 
@@ -1606,8 +1616,9 @@ def custom_mutator(data, buffer_size, seed):
 
     if statistics["num_calls"] > print_stats_at and not stats_printed:
         import json
+
         print("-- run statistics --")
-        print(json.dumps(statistics, indent=2))
+        print(json.dumps(statistics))
         stats_printed = True
     return data
 
