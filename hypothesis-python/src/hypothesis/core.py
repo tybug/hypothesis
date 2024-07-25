@@ -1463,15 +1463,24 @@ def custom_mutator(data, buffer_size, seed):
 
     stats = {}
     random = Random(seed)
+
+    def _fresh():
+        stats["mode"] = "fresh"
+        # ramp up to buffer_size or pick a weighted length from [0, buffer_size]?
+        # returning randbytes(BUFFER_SIZE) probably has performance implications.
+        return random.randbytes(BUFFER_SIZE)
+
+    # blackbox exploratory/warmup phase for the first 100 inputs
+    # TODO we probably want an adaptive tradeoff here, "blackbox until n consecutive uninteresting inputs"
+    if statistics["num_calls"] < 100:
+        return _fresh()
+
     try:
         bounds = data_to_bounds[data]
     except KeyError:
         # we haven't seen this data before. either I messed up the code (possible)
         # or atheris is trying a fresh input.
-        stats["mode"] = "fresh"
-        # ramp up to buffer_size or pick a weighted length from [0, buffer_size]?
-        # returning randbytes(buffer_size) probably has performance implications.
-        return random.randbytes(100)
+        return _fresh()
     if track_per_item_stats:
         stats["mode"] = "mutate"
 
