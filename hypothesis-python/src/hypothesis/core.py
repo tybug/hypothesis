@@ -1590,9 +1590,9 @@ def custom_mutator(data, buffer_size, seed):
                 if is_inf(max_value, sign=1.0):
                     max_val = next_down(max_value)
 
-                assert not math.isinf(min_val), "assert1"
-                assert not math.isinf(max_val), "assert2"
-                assert sign_aware_lte(min_val, max_val), "assert3"
+                assert not math.isinf(min_val)
+                assert not math.isinf(max_val)
+                assert sign_aware_lte(min_val, max_val)
 
                 forced = random_float_between(
                     min_value, max_value, smallest_nonzero_mag, random=random
