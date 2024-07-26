@@ -94,6 +94,7 @@ from hypothesis.internal.conjecture.data import (
     bits_to_bytes,
     BYTE_MASKS,
     DRAW_STRING_DEFAULT_MAX_SIZE,
+    ir_value_permitted,
 )
 from hypothesis.internal.conjecture.engine import (
     BUFFER_SIZE,
@@ -1494,10 +1495,18 @@ def custom_mutator(data, buffer_size, seed):
         stats["mutations"] = []
         after = [_make_serializable(v) for (_, _, v) in bounds.values()]
 
-    # ir_type: list[ir value]
-    splices = defaultdict(list)
-    for ir_type, _kwargs, value in bounds.values():
-        splices[ir_type].append(value)
+    def _get_splice_choices(location, ir_type, kwargs):
+        splices = []
+        for splice_location, (splice_ir_type, _splice_kwargs, value) in bounds.items():
+            # don't splice an ir node with itself (same start, end value)
+            if location == splice_location:
+                continue
+            if ir_type != splice_ir_type:
+                continue
+            if not ir_value_permitted(value, ir_type, kwargs):
+                continue
+            splices.append(value)
+        return splices
 
     replacements = []
     for i in mutations:
@@ -1512,7 +1521,7 @@ def custom_mutator(data, buffer_size, seed):
         mutation_type = "normal"
         # 10% chance for a mutation to be a splice (copy) of an existing node of
         # the same type instead
-        if random.randint(0, 9) == 0 and (splice_choices := splices[ir_type]):
+        if random.randint(0, 9) == 0 and (splice_choices := _get_splice_choices((start, end), ir_type, kwargs)):
             mutation_type = "splice"
             forced = random.choice(splice_choices)
             if track_per_item_stats:
@@ -1520,7 +1529,7 @@ def custom_mutator(data, buffer_size, seed):
                     _make_serializable(v) for v in splice_choices
                 ]
         elif ir_type == "integer":
-            # TODO bias towards lower integers?
+            # TODO bias towards smaller integers, copy weighting from hypothesis
             min_value = kwargs["min_value"]
             max_value = kwargs["max_value"]
             probe_radius = 2**127 - 1
