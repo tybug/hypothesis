@@ -1685,8 +1685,11 @@ class HypothesisHandle:
             self.__cached_target = self._get_fuzz_target(args=(), kwargs={})
             return self.__cached_target
 
-    def fuzz_with_atheris(self, *, kwargs, warmstart=None, corpus_dir=None, **_kwargs):
+    def fuzz_with_atheris(self, *, kwargs=None, warmstart=None, corpus_dir=None, **_kwargs):
         import atheris
+
+        if kwargs is None:
+            kwargs = {}
 
         # defaults to 4096 in libfuzzer. we want the ability to grow up to BUFFER_SIZE.
         _kwargs["max_len"] = BUFFER_SIZE
@@ -1701,7 +1704,7 @@ class HypothesisHandle:
         # overruns. They don't give the same mutation benefit as in standard libfuzzer.
         # So if libfuzzer does (2), we want to disable it. But if libfuzze does (1),
         # leaving it enabled (the default) is still probably net positive.
-        # kwargs["reduce_inputs"] = 0
+        # _kwargs["reduce_inputs"] = 0
 
         # maintain argv[0] as the invoked python file, which seems to be the
         # structure atheris expects. not doing so throws off arg order interpretation.
