@@ -103,6 +103,7 @@ from hypothesis.internal.conjecture.engine import (
 from hypothesis.internal.conjecture.junkdrawer import (
     ensure_free_stackframes,
     gc_cumulative_time,
+    replace_all,
 )
 from hypothesis.internal.conjecture.shrinker import sort_key
 from hypothesis.internal.conjecture.utils import _calc_p_continue
@@ -1369,23 +1370,17 @@ BOUNDS_CACHE_SIZE = 16_384  # 2**14
 data_to_bounds: Mapping[
     bytes, Mapping[Tuple[int, int], Tuple[IRTypeName, IRKWargsType, IRType]]
 ] = LRUReusedCache(BOUNDS_CACHE_SIZE)
-largest_overrun = 0
 
-# * A "soft" overrun is one which overruns largest_overrun and causes us to increase
-#   the random size we generate. We probe upwards instead of always generating
-#   BUFFER_SIZE for performance reasons.
-# * A "hard" overrun is one which overruns BUFFER_SIZE. There is no recovering from this.
 statistics = {
     "per_item_stats": [],
     "num_calls": 0,
-    "num_soft_overruns": 0,
-    "num_hard_overruns": 0,
     "time_mutating": 0,
 }
 track_per_item_stats = False
 custom_mutator_called = False
 print_stats_at = 25_000
-stats_printed = True # set to True to disable printing entirely
+stats_printed = True  # set to True to disable printing entirely
+
 
 def _size(*, min_size, max_size, average_size, random):
     p_continue = _calc_p_continue(average_size - min_size, max_size - min_size)
@@ -1393,6 +1388,7 @@ def _size(*, min_size, max_size, average_size, random):
     while random.random() < p_continue and size < max_size:
         size += 1
     return size
+
 
 def num_mutations(*, min_size, max_size, random):
     # TODO tweak this distribution?
@@ -1404,7 +1400,7 @@ def num_mutations(*, min_size, max_size, random):
             # otherwise we would mutate basically nothing for larger nodes
             0.1 * (min_size + max_size),
         ),
-        0.5 * (min_size + max_size)
+        0.5 * (min_size + max_size),
     )
     return _size(
         min_size=min_size, max_size=max_size, average_size=average_size, random=random
@@ -1447,6 +1443,8 @@ def random_float_between(min_value, max_value, smallest_nonzero_magnitude, *, ra
 
 
 def _make_serializable(ir_value):
+    # this isn't free, so we should only run this when we're explictly tracking stats.
+    assert track_per_item_stats
     if type(ir_value) is bytes:
         return str(ir_value)
     return ir_value
@@ -1496,6 +1494,12 @@ def custom_mutator(data, buffer_size, seed):
         stats["mutations"] = []
         after = [_make_serializable(v) for (_, _, v) in bounds.values()]
 
+    # ir_type: list[ir value]
+    splices = defaultdict(list)
+    for ir_type, _kwargs, value in bounds.values():
+        splices[ir_type].append(value)
+
+    replacements = []
     for i in mutations:
         start, end = choices[i]
         (ir_type, kwargs, value) = bounds[(start, end)]
@@ -1504,7 +1508,19 @@ def custom_mutator(data, buffer_size, seed):
         if kwargs["forced"] is not None:
             continue
 
-        if ir_type == "integer":
+        extra_item_stats = {}
+        mutation_type = "normal"
+        # 10% chance for a mutation to be a splice (copy) of an existing node of
+        # the same type instead
+        if random.randint(0, 9) == 0 and (splice_choices := splices[ir_type]):
+            mutation_type = "splice"
+            forced = random.choice(splice_choices)
+            if track_per_item_stats:
+                extra_item_stats["splice_choices"] = [
+                    _make_serializable(v) for v in splice_choices
+                ]
+        elif ir_type == "integer":
+            # TODO bias towards lower integers?
             min_value = kwargs["min_value"]
             max_value = kwargs["max_value"]
             probe_radius = 2**127 - 1
@@ -1597,6 +1613,9 @@ def custom_mutator(data, buffer_size, seed):
                 forced = random_float_between(
                     min_value, max_value, smallest_nonzero_mag, random=random
                 )
+        else:
+            raise Exception(f"unhandled case ({ir_type=})")
+
         # value of the prefix doesn't matter since we're forcing the draw.
         cd = AtherisData(BUFFER_SIZE, prefix=bytes(BUFFER_SIZE), random=random)
         # overwrite the forced val in the kwargs
@@ -1611,25 +1630,22 @@ def custom_mutator(data, buffer_size, seed):
                     "ir_type": ir_type,
                     "before": _make_serializable(value),
                     "after": _make_serializable(forced),
+                    "mutation_type": mutation_type,
+                    **extra_item_stats,
                 }
             )
-        data = data[:start] + replacement + data[end:]
+        replacements.append((start, end, replacement))
 
-    if len(data) <= largest_overrun:
-        # generate random bytes up to double the largest overrun to ensure we grow
-        # to the appropriate size for the test case.
-        data += random.randbytes(largest_overrun * 2 - len(data))
-        assert len(data) == largest_overrun * 2
+    replacements = sorted(replacements, key=lambda start_end_value: start_end_value[0])
+    data = bytearray(replace_all(data, replacements))
 
-    # if we mutated to something over BUFFER_SIZE, throw away this attempt. we could
-    # try intelligent fixups but it's just not worth it when atheris will learn
-    # that the input is not leading to new coverage anyway.
+    mutation_end = replacements[-1][1] if replacements else 0
+    # fully randomize each time in case we misalign and dip into the remaining buffer.
+    # we don't want to use the same randomized+saved buffer each time.
+    data[mutation_end:] = random.randbytes(len(data[mutation_end:]))
     if len(data) > BUFFER_SIZE:
-        if track_per_item_stats:
-            stats["hard_overrun"] = True
-        statistics["num_hard_overruns"] += 1
-        data = b""
-
+        data = data[:BUFFER_SIZE]
+    data = bytes(data)
     statistics["time_mutating"] += time.time() - t_start
 
     if track_per_item_stats:
@@ -1685,7 +1701,9 @@ class HypothesisHandle:
             self.__cached_target = self._get_fuzz_target(args=(), kwargs={})
             return self.__cached_target
 
-    def fuzz_with_atheris(self, *, kwargs=None, warmstart=None, corpus_dir=None, **_kwargs):
+    def fuzz_with_atheris(
+        self, *, kwargs=None, warmstart=None, corpus_dir=None, **_kwargs
+    ):
         import atheris
 
         if kwargs is None:
@@ -1759,9 +1777,6 @@ class AtherisData(ConjectureData):
         assert n > 0
         n_bytes = bits_to_bytes(n)
         if self.index + n_bytes > len(self.prefix):
-            global largest_overrun
-            largest_overrun = len(self.prefix)
-            statistics["num_soft_overruns"] += 1
             self.mark_overrun()
 
         if forced is not None:
