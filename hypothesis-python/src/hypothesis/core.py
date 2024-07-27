@@ -1530,6 +1530,7 @@ def custom_mutator(data, buffer_size, seed):
                 ]
         elif ir_type == "integer":
             # TODO bias towards smaller integers, copy weighting from hypothesis
+            # TODO same for floats
             min_value = kwargs["min_value"]
             max_value = kwargs["max_value"]
             probe_radius = 2**127 - 1
