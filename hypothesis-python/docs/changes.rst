@@ -18,6 +18,65 @@ Hypothesis 6.x
 
     .. include:: ../RELEASE.rst
 
+.. _v6.108.4:
+
+--------------------
+6.108.4 - 2024-07-22
+--------------------
+
+This patch addresses the issue of hypothesis potentially accessing
+mocked ``time.perf_counter`` during test execution (:issue:`4051`).
+
+.. _v6.108.3:
+
+--------------------
+6.108.3 - 2024-07-22
+--------------------
+
+Minor internal-only cleanups to some error-handling and reporting code.
+
+.. _v6.108.2:
+
+--------------------
+6.108.2 - 2024-07-15
+--------------------
+
+This patch disables :func:`hypothesis.target` on alternative
+backends where it would not work.
+
+.. _v6.108.1:
+
+--------------------
+6.108.1 - 2024-07-14
+--------------------
+
+This patch updates our vendored `list of top-level domains <https://www.iana.org/domains/root/db>`__,
+which is used by the provisional :func:`~hypothesis.provisional.domains` strategy.
+
+.. _v6.108.0:
+
+--------------------
+6.108.0 - 2024-07-13
+--------------------
+
+This patch changes most Flaky errors to use an ExceptionGroup, which
+makes the representation of these errors easier to understand.
+
+.. _v6.107.0:
+
+--------------------
+6.107.0 - 2024-07-13
+--------------------
+
+The ``alphabet=`` argument to :func:`~hypothesis.strategies.from_regex`
+now accepts unions of :func:`~hypothesis.strategies.characters` and
+:func:`~hypothesis.strategies.sampled_from` strategies, in addition to
+accepting each individually.
+
+This patch also fixes a bug where ``text(...).filter(re.compile(...).match)``
+could generate non-matching instances if the regex pattern contained ``|``
+(:issue:`4008`).
+
 .. _v6.106.1:
 
 --------------------
