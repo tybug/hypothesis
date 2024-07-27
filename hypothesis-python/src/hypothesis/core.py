@@ -86,14 +86,14 @@ from hypothesis.internal.compat import (
     int_to_bytes,
 )
 from hypothesis.internal.conjecture.data import (
+    BYTE_MASKS,
+    DRAW_STRING_DEFAULT_MAX_SIZE,
     ConjectureData,
     IRKWargsType,
     IRType,
     IRTypeName,
     Status,
     bits_to_bytes,
-    BYTE_MASKS,
-    DRAW_STRING_DEFAULT_MAX_SIZE,
     ir_value_permitted,
 )
 from hypothesis.internal.conjecture.engine import (
@@ -1444,7 +1444,7 @@ def random_float_between(min_value, max_value, smallest_nonzero_magnitude, *, ra
 
 
 def _make_serializable(ir_value):
-    # this isn't free, so we should only run this when we're explictly tracking stats.
+    # this isn't free, so we should only run this when we're explicitly tracking stats.
     assert track_per_item_stats
     if type(ir_value) is bytes:
         return str(ir_value)
@@ -1521,7 +1521,9 @@ def custom_mutator(data, buffer_size, seed):
         mutation_type = "normal"
         # 10% chance for a mutation to be a splice (copy) of an existing node of
         # the same type instead
-        if random.randint(0, 9) == 0 and (splice_choices := _get_splice_choices((start, end), ir_type, kwargs)):
+        if random.randint(0, 9) == 0 and (
+            splice_choices := _get_splice_choices((start, end), ir_type, kwargs)
+        ):
             mutation_type = "splice"
             forced = random.choice(splice_choices)
             if track_per_item_stats:
