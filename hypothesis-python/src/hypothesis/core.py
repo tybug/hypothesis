@@ -1629,9 +1629,9 @@ def custom_mutator(data, buffer_size, seed):
             # TODO tweak this probability?
             if allow_nan and random.randint(0, 199) == 0:
                 forced = math.nan
-            elif is_inf(min_value, sign=-1.0) and random.randint(0, 199) == 0:
-                forced = math.inf
             elif is_inf(max_value, sign=1.0) and random.randint(0, 199) == 0:
+                forced = math.inf
+            elif is_inf(min_value, sign=-1.0) and random.randint(0, 199) == 0:
                 forced = -math.inf
             else:
                 min_val = min_value
