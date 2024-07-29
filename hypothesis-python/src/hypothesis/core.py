@@ -1395,6 +1395,8 @@ def fake_subTest(self, msg=None, **__):
 
 
 BOUNDS_CACHE_SIZE = 16_384  # 2**14
+INT_SIZES = (8, 16, 32, 64, 128)
+INT_SIZES_WEIGHTS = (4.0, 8.0, 1.0, 1.0, 0.5)
 data_to_bounds: Mapping[
     bytes, Mapping[Tuple[int, int], Tuple[IRTypeName, IRKWargsType, IRType]]
 ] = LRUReusedCache(BOUNDS_CACHE_SIZE)
@@ -1558,22 +1560,34 @@ def custom_mutator(data, buffer_size, seed):
                     _make_serializable(v) for v in splice_choices
                 ]
         elif ir_type == "integer":
-            # TODO bias towards smaller integers, copy weighting from hypothesis
-            # TODO same for floats
             min_value = kwargs["min_value"]
             max_value = kwargs["max_value"]
-            probe_radius = 2**127 - 1
+            # roughly equivalent to shrink_towards in draw_integer, but without
+            # shrinking semantics.
+            origin = 0
+            if min_value is not None:
+                origin = max(min_value, 0)
+            if max_value is not None:
+                origin = min(max_value, 0)
+
+            def _unbounded_integer():
+                # bias towards smaller values. distribution copied from draw_integer
+                size = random.choices(INT_SIZES, INT_SIZES_WEIGHTS, k=1)[0]
+                radius = 2 ** (size - 1) - 1
+                return random.randint(-radius, radius)
+
             if min_value is None and max_value is None:
-                min_value = -probe_radius
-                max_value = probe_radius
+                forced = _unbounded_integer()
             elif min_value is None:
                 assert max_value is not None
-                min_value = max_value - probe_radius
+                forced = max_value + 1
+                while forced > max_value:
+                    forced = origin + _unbounded_integer()
             elif max_value is None:
                 assert min_value is not None
-                max_value = min_value + probe_radius
-
-            forced = random.randint(min_value, max_value)
+                forced = min_value - 1
+                while forced < min_value:
+                    forced = origin + _unbounded_integer()
         elif ir_type == "boolean":
             p = kwargs["p"]
             assert 0 < p < 1
