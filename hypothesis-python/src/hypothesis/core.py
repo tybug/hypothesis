@@ -1591,7 +1591,7 @@ def custom_mutator(data, buffer_size, seed):
         elif ir_type == "boolean":
             p = kwargs["p"]
             assert 0 < p < 1
-            forced = int(random.randint(0, 1))
+            forced = bool(random.randint(0, 1))
         elif ir_type == "bytes":
             size = kwargs["size"]
             forced = random.randbytes(size)
