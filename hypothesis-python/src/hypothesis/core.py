@@ -1424,7 +1424,6 @@ def num_mutations(*, min_size, max_size, random):
     # TODO tweak this distribution?
     average_size = min(
         max(
-            min_size * 1.3,
             min_size + 3,
             # for targets with a large amount of nodes, mutate 10% of them on average.
             # otherwise we would mutate basically nothing for larger nodes
@@ -1630,6 +1629,11 @@ def custom_mutator(data, buffer_size, seed):
                     n = random.randint(0, intervals.size - 1)
                 forced += chr(intervals[n])
         elif ir_type == "float":
+            # TODO bias towards smaller floats + maybe also use NASTY_FLOATS
+            # hypothesis doesn't have float size biasing but I think its random
+            # distribution biases naturally due to the logarithmic nature of float
+            # distribution. check whether our random sampling follows the same
+            # distribution?
             min_value = kwargs["min_value"]
             max_value = kwargs["max_value"]
             allow_nan = kwargs["allow_nan"]
@@ -1640,7 +1644,8 @@ def custom_mutator(data, buffer_size, seed):
 
             # draw a "special" value (nan/inf/ninf) each with probability 0.5%,
             # so total 1.5%
-            # TODO tweak this probability?
+            # TODO tweak this probability? I think hypothesis uses significantly
+            # higher for NASTY_FLOATS.
             if allow_nan and random.randint(0, 199) == 0:
                 forced = math.nan
             elif is_inf(max_value, sign=1.0) and random.randint(0, 199) == 0:
