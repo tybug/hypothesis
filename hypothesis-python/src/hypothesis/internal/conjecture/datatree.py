@@ -24,7 +24,6 @@ from hypothesis.internal.conjecture.data import (
     DataObserver,
     FloatKWargs,
     IntegerKWargs,
-    InvalidAt,
     IRKWargsType,
     IRType,
     IRTypeName,
@@ -440,8 +439,6 @@ class TreeNode:
     #   be explored when generating novel prefixes)
     transition: Union[None, Branch, Conclusion, Killed] = attr.ib(default=None)
 
-    invalid_at: Optional[InvalidAt] = attr.ib(default=None)
-
     # A tree node is exhausted if every possible sequence of draws below it has
     # been explored. We only update this when performing operations that could
     # change the answer.
@@ -495,8 +492,6 @@ class TreeNode:
         del self.ir_types[i:]
         del self.values[i:]
         del self.kwargs[i:]
-        # we have a transition now, so we don't need to carry around invalid_at.
-        self.invalid_at = None
         assert len(self.values) == len(self.kwargs) == len(self.ir_types) == i
 
     def check_exhausted(self):
@@ -865,13 +860,6 @@ class DataTree:
                     t = node.transition
                     data.conclude_test(t.status, t.interesting_origin)
                 elif node.transition is None:
-                    if node.invalid_at is not None:
-                        (ir_type, kwargs, forced) = node.invalid_at
-                        try:
-                            draw(ir_type, kwargs, forced=forced, convert_forced=False)
-                        except StopTest:
-                            if data.invalid_at is not None:
-                                raise
                     raise PreviouslyUnseenBehaviour
                 elif isinstance(node.transition, Branch):
                     v = draw(node.transition.ir_type, node.transition.kwargs)
@@ -890,16 +878,9 @@ class DataTree:
         return TreeRecordingObserver(self)
 
     def _draw(self, ir_type, kwargs, *, random, forced=None):
-        # we should possibly pull out BUFFER_SIZE to a common file to avoid this
-        # circular import.
-        from hypothesis.internal.conjecture.engine import BUFFER_SIZE
+        from hypothesis.internal.conjecture.data import ir_to_buffer
 
-        cd = ConjectureData(max_length=BUFFER_SIZE, prefix=b"", random=random)
-        draw_func = getattr(cd, f"draw_{ir_type}")
-
-        value = draw_func(**kwargs, forced=forced)
-        buf = cd.buffer
-
+        (value, buf) = ir_to_buffer(ir_type, kwargs, forced=forced, random=random)
         # using floats as keys into branch.children breaks things, because
         # e.g. hash(0.0) == hash(-0.0) would collide as keys when they are
         # in fact distinct child branches.
@@ -1016,10 +997,6 @@ class TreeRecordingObserver(DataObserver):
         self, value: bool, *, was_forced: bool, kwargs: BooleanKWargs
     ) -> None:
         self.draw_value("boolean", value, was_forced=was_forced, kwargs=kwargs)
-
-    def mark_invalid(self, invalid_at: InvalidAt) -> None:
-        if self.__current_node.transition is None:
-            self.__current_node.invalid_at = invalid_at
 
     def draw_value(
         self,
