@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING, Callable, Dict, Optional, Tuple, TypeVar, Unio
 
 import attr
 
-from hypothesis.internal.compat import int_from_bytes, int_to_bytes
 from hypothesis.internal.conjecture.choicetree import (
     ChoiceTree,
     prefix_selection_order,
@@ -402,12 +401,6 @@ class Shrinker:
         self.cached_test_function_ir(tree)
         return previous is not self.shrink_target
 
-    def consider_new_buffer(self, buffer):
-        """Returns True if after running this buffer the result would be
-        the current shrink_target."""
-        buffer = bytes(buffer)
-        return buffer.startswith(self.buffer) or self.incorporate_new_buffer(buffer)
-
     def incorporate_new_buffer(self, buffer):
         """Either runs the test function on this buffer and returns True if
         that changed the shrink_target, or determines that doing so would
@@ -682,7 +675,6 @@ class Shrinker:
                 "minimize_duplicated_nodes",
                 "minimize_individual_nodes",
                 "redistribute_block_pairs",
-                "lower_blocks_together",
             ]
         )
 
@@ -789,10 +781,6 @@ class Shrinker:
     @property
     def buffer(self):
         return self.shrink_target.buffer
-
-    @property
-    def blocks(self):
-        return self.shrink_target.blocks
 
     @property
     def nodes(self):
@@ -1281,39 +1269,6 @@ class Shrinker:
             )
 
         find_integer(boost)
-
-    @defines_shrink_pass()
-    def lower_blocks_together(self, chooser):
-        block = chooser.choose(self.blocks, lambda b: not b.trivial)
-
-        # Choose the next block to be up to eight blocks onwards. We don't
-        # want to go too far (to avoid quadratic time) but it's worth a
-        # reasonable amount of lookahead, especially as we expect most
-        # blocks are zero by this point anyway.
-        next_block = self.blocks[
-            chooser.choose(
-                range(block.index + 1, min(len(self.blocks), block.index + 9)),
-                lambda j: not self.blocks[j].trivial,
-            )
-        ]
-
-        buffer = self.buffer
-
-        m = int_from_bytes(buffer[block.start : block.end])
-        n = int_from_bytes(buffer[next_block.start : next_block.end])
-
-        def lower(k):
-            if k > min(m, n):
-                return False
-            attempt = bytearray(buffer)
-            attempt[block.start : block.end] = int_to_bytes(m - k, block.length)
-            attempt[next_block.start : next_block.end] = int_to_bytes(
-                n - k, next_block.length
-            )
-            assert len(attempt) == len(buffer)
-            return self.consider_new_buffer(attempt)
-
-        find_integer(lower)
 
     def minimize_nodes(self, nodes):
         ir_type = nodes[0].ir_type
