@@ -1474,7 +1474,7 @@ def random_float_between(min_value, max_value, smallest_nonzero_magnitude, *, ra
 def _make_serializable(ir_value):
     # this isn't free, so we should only run this when we're explicitly tracking stats.
     assert track_per_item_stats
-    if type(ir_value) is bytes:
+    if type(ir_value) in [bytes, bytearray]:
         return str(ir_value)
     return ir_value
 
@@ -1587,6 +1587,10 @@ def custom_mutator(data, buffer_size, seed):
                 forced = min_value - 1
                 while forced < min_value:
                     forced = origin + _unbounded_integer()
+            else:
+                assert min_value is not None
+                assert max_value is not None
+                forced = random.randint(min_value, max_value)
         elif ir_type == "boolean":
             p = kwargs["p"]
             assert 0 < p < 1
