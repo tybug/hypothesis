@@ -1565,9 +1565,9 @@ def custom_mutator(data, buffer_size, seed):
             # shrinking semantics.
             origin = 0
             if min_value is not None:
-                origin = max(min_value, 0)
+                origin = max(min_value, origin)
             if max_value is not None:
-                origin = min(max_value, 0)
+                origin = min(max_value, origin)
 
             def _unbounded_integer():
                 # bias towards smaller values. distribution copied from draw_integer
