@@ -1440,12 +1440,12 @@ def random_float_between(min_value, max_value, smallest_nonzero_magnitude, *, ra
     def from_range(a, b):
         return random.randint(float_to_int(a), float_to_int(b))
 
-    # handle zeroes separately so smallest_nonzero_magnitude can think of
-    # itself as a complete interval (instead of a hole at ±0).
-    if sign_aware_lte(min_value, -0.0) and sign_aware_lte(-0.0, max_value):
-        return -0.0
-    if sign_aware_lte(min_value, 0.0) and sign_aware_lte(0.0, max_value):
-        return 0.0
+    # # handle zeroes separately so smallest_nonzero_magnitude can think of
+    # # itself as a complete interval (instead of a hole at ±0).
+    # if sign_aware_lte(min_value, -0.0) and sign_aware_lte(-0.0, max_value):
+    #     return -0.0
+    # if sign_aware_lte(min_value, 0.0) and sign_aware_lte(0.0, max_value):
+    #     return 0.0
 
     if flt.is_negative(min_value):
         if flt.is_negative(max_value):
