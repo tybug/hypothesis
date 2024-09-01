@@ -1705,11 +1705,9 @@ def custom_mutator(data, buffer_size, seed):
                 # weight towards smaller floats - like we do for ints, but even
                 # more heavily, as the range can be enormous.
                 diff = max_val - min_val
-                if (
-                    not math.isinf(diff)
-                    and (bits := int(diff).bit_length()) > 18
-                    and random.randint(0, 7) < 7
-                ):
+                # max - min can overflow to inf at the float boundary.
+                bits = int(diff).bit_length() if not math.isinf(diff) else 1024
+                if bits > 18 and random.randint(0, 7) < 7:
                     bits = min(
                         bits, random.choices(FLOAT_SIZES, FLOAT_SIZES_WEIGHTS, k=1)[0]
                     )
