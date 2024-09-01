@@ -1437,20 +1437,28 @@ def num_mutations(*, min_size, max_size, random):
 
 
 def random_float_between(min_value, max_value, smallest_nonzero_magnitude, *, random):
+    assert not math.isinf(min_value)
+    assert not math.isinf(max_value)
+
     r = random.random()
     if flt.is_negative(min_value):
         if flt.is_negative(max_value):
             max_point = min(max_value, -smallest_nonzero_magnitude)
             f = max_point + (min_value - max_point) * (1 - r)
         else:
-            # case: range crosses 0.
-            total_range = max_value - min_value
-            if r < -min_value / total_range:
-                # generate a negative number
-                f = min_value + total_range * r
+            start = min_value
+            # similar to libfuzzer, ref
+            # https://github.com/llvm/llvm-project/blob/e4f3b56dae25e792b4aa5b009e371c8836fdc2fa/
+            # compiler-rt/include/fuzzer/FuzzedDataProvider.h#L248
+            if math.isinf(max_value - min_value):
+                # max_value - min_value can overflow. use half of the diff as the
+                # range and use the first and second half of the diff with equal prob.
+                total_range = (max_value / 2.0) - (min_value / 2.0)
+                if random.randint(0, 1) == 0:
+                    start += total_range
             else:
-                # generate a positive number
-                f = max_value - total_range * (1 - r)
+                total_range = max_value - min_value
+            f = start + total_range * r
 
             # I don't really want to deal with this case right now because it splits
             # the range into two segments and I have to bookkeep the relative sizes etc.
@@ -1461,7 +1469,6 @@ def random_float_between(min_value, max_value, smallest_nonzero_magnitude, *, ra
         # case: both positive.
         min_point = max(min_value, smallest_nonzero_magnitude)
         f = min_point + (max_value - min_point) * r
-
     return f
 
 
@@ -1669,10 +1676,6 @@ def custom_mutator(data, buffer_size, seed):
             nasty_floats = [f for f in NASTY_FLOATS + boundary_values if permitted(f)]
             if random.randint(0, 99) < 3 and nasty_floats:
                 forced = random.choice(nasty_floats)
-            elif is_inf(max_value, sign=1.0) and random.randint(0, 199) == 0:
-                forced = math.inf
-            elif is_inf(min_value, sign=-1.0) and random.randint(0, 199) == 0:
-                forced = -math.inf
             else:
                 min_val = min_value
                 max_val = max_value
@@ -1690,7 +1693,7 @@ def custom_mutator(data, buffer_size, seed):
                 assert sign_aware_lte(min_val, max_val)
 
                 forced = random_float_between(
-                    min_value, max_value, smallest_nonzero_mag, random=random
+                    min_val, max_val, smallest_nonzero_mag, random=random
                 )
         else:
             raise Exception(f"unhandled case ({ir_type=})")
