@@ -96,6 +96,7 @@ from hypothesis.internal.conjecture.data import (
     Status,
     bits_to_bytes,
     ir_value_permitted,
+    NASTY_FLOATS,
 )
 from hypothesis.internal.conjecture.engine import (
     BUFFER_SIZE,
@@ -106,6 +107,7 @@ from hypothesis.internal.conjecture.junkdrawer import (
     ensure_free_stackframes,
     gc_cumulative_time,
     replace_all,
+    clamp,
 )
 from hypothesis.internal.conjecture.shrinker import sort_key
 from hypothesis.internal.conjecture.utils import _calc_p_continue
@@ -118,8 +120,6 @@ from hypothesis.internal.escalation import (
     is_hypothesis_file,
 )
 from hypothesis.internal.floats import (
-    float_to_int,
-    int_to_float,
     next_down,
     next_up,
     sign_aware_lte,
@@ -1437,38 +1437,32 @@ def num_mutations(*, min_size, max_size, random):
 
 
 def random_float_between(min_value, max_value, smallest_nonzero_magnitude, *, random):
-    def from_range(a, b):
-        return random.randint(float_to_int(a), float_to_int(b))
-
-    # # handle zeroes separately so smallest_nonzero_magnitude can think of
-    # # itself as a complete interval (instead of a hole at ±0).
-    # if sign_aware_lte(min_value, -0.0) and sign_aware_lte(-0.0, max_value):
-    #     return -0.0
-    # if sign_aware_lte(min_value, 0.0) and sign_aware_lte(0.0, max_value):
-    #     return 0.0
-
+    r = random.random()
     if flt.is_negative(min_value):
         if flt.is_negative(max_value):
-            # case: both negative.
             max_point = min(max_value, -smallest_nonzero_magnitude)
-            # float_to_int increases as negative magnitude increases, so
-            # invert order.
-            f = from_range(max_point, min_value)
+            f = max_point + (min_value - max_point) * (1 - r)
         else:
-            # case: straddles midpoint (which is between -0.0 and 0.0).
-            # TODO use a more fair distribution than randomly picking between
-            # the two. this makes it equally likely to pick numbers on either
-            # side of 0 even if the interval is (-0.001, 999).
-            if random.randint(0, 1) == 0:
-                f = from_range(-smallest_nonzero_magnitude, min_value)
+            # case: range crosses 0.
+            total_range = max_value - min_value
+            if r < -min_value / total_range:
+                # generate a negative number
+                f = min_value + total_range * r
             else:
-                f = from_range(smallest_nonzero_magnitude, max_value)
+                # generate a positive number
+                f = max_value - total_range * (1 - r)
+
+            # I don't really want to deal with this case right now because it splits
+            # the range into two segments and I have to bookkeep the relative sizes etc.
+            # this should be a very rare case, so effectively throw it away if it happens.
+            if abs(f) < smallest_nonzero_magnitude and f != 0:
+                f = min_value
     else:
         # case: both positive.
         min_point = max(min_value, smallest_nonzero_magnitude)
-        f = from_range(min_point, max_value)
+        f = min_point + (max_value - min_point) * r
 
-    return int_to_float(f)
+    return f
 
 
 def _make_serializable(ir_value):
@@ -1571,8 +1565,8 @@ def custom_mutator(data, buffer_size, seed):
 
             def _unbounded_integer():
                 # bias towards smaller values. distribution copied from draw_integer
-                size = random.choices(INT_SIZES, INT_SIZES_WEIGHTS, k=1)[0]
-                radius = 2 ** (size - 1) - 1
+                bits = random.choices(INT_SIZES, INT_SIZES_WEIGHTS, k=1)[0]
+                radius = 2 ** (bits - 1) - 1
                 return random.randint(-radius, radius)
 
             if min_value is None and max_value is None:
@@ -1633,11 +1627,6 @@ def custom_mutator(data, buffer_size, seed):
                     n = random.randint(0, intervals.size - 1)
                 forced += chr(intervals[n])
         elif ir_type == "float":
-            # TODO bias towards smaller floats + maybe also use NASTY_FLOATS
-            # hypothesis doesn't have float size biasing but I think its random
-            # distribution biases naturally due to the logarithmic nature of float
-            # distribution. check whether our random sampling follows the same
-            # distribution?
             min_value = kwargs["min_value"]
             max_value = kwargs["max_value"]
             allow_nan = kwargs["allow_nan"]
@@ -1646,12 +1635,27 @@ def custom_mutator(data, buffer_size, seed):
             def is_inf(value, *, sign):
                 return math.copysign(1.0, value) == sign and math.isinf(value)
 
-            # draw a "special" value (nan/inf/ninf) each with probability 0.5%,
-            # so total 1.5%
-            # TODO tweak this probability? I think hypothesis uses significantly
-            # higher for NASTY_FLOATS.
-            if allow_nan and random.randint(0, 199) == 0:
-                forced = math.nan
+            def permitted(f):
+                if math.isnan(f):
+                    return allow_nan
+                if 0 < abs(f) < smallest_nonzero_mag:
+                    return False
+                return sign_aware_lte(min_value, f) and sign_aware_lte(f, max_value)
+
+            # draw a "nasty" value with probability 0.03. I think hypothesis uses 0.2,
+            # but they have a significantly smaller budget and also count duplicates,
+            # so we should have a lower p.
+            boundary_values = [
+                min_value,
+                next_up(min_value),
+                min_value + 1,
+                max_value - 1,
+                next_down(max_value),
+                max_value,
+            ]
+            nasty_floats = [f for f in NASTY_FLOATS + boundary_values if permitted(f)]
+            if random.randint(0, 99) < 3 and nasty_floats:
+                forced = random.choice(nasty_floats)
             elif is_inf(max_value, sign=1.0) and random.randint(0, 199) == 0:
                 forced = math.inf
             elif is_inf(min_value, sign=-1.0) and random.randint(0, 199) == 0:
