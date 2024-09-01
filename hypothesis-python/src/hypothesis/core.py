@@ -1711,7 +1711,7 @@ def custom_mutator(data, buffer_size, seed):
                     bits = min(
                         bits, random.choices(FLOAT_SIZES, FLOAT_SIZES_WEIGHTS, k=1)[0]
                     )
-                    radius = 2 ** (bits - 1) - 1
+                    radius = float(2 ** (bits - 1) - 1)
                     forced = origin + random_float_between(
                         -radius, radius, smallest_nonzero_mag, random=random
                     )
