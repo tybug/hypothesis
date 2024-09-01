@@ -1584,7 +1584,20 @@ def custom_mutator(data, buffer_size, seed):
             else:
                 assert min_value is not None
                 assert max_value is not None
-                forced = random.randint(min_value, max_value)
+                # somewhat hodgepodge amalgamation of what hypothesis does for
+                # weighting the size of bounded ints, and what I think works
+                # better for fuzzing (e.g. lowering the bit limit, decreasing the
+                # probability from 7/8 to 1/2).
+                bits = (max_value - min_value).bit_length()
+                if bits > 18 and random.randint(0, 1) == 0:
+                    bits = min(
+                        bits, random.choices(INT_SIZES, INT_SIZES_WEIGHTS, k=1)[0]
+                    )
+                    radius = 2 ** (bits - 1) - 1
+                    forced = origin + random.randint(-radius, radius)
+                    forced = clamp(min_value, forced, max_value)
+                else:
+                    forced = random.randint(min_value, max_value)
         elif ir_type == "boolean":
             p = kwargs["p"]
             assert 0 < p < 1
