@@ -1397,6 +1397,8 @@ def fake_subTest(self, msg=None, **__):
 BOUNDS_CACHE_SIZE = 16_384  # 2**14
 INT_SIZES = (8, 16, 32, 64, 128)
 INT_SIZES_WEIGHTS = (4.0, 8.0, 1.0, 1.0, 0.5)
+FLOAT_SIZES = (8, 16, 32, 64, 128, 1024)
+FLOAT_SIZES_WEIGHTS = (4.0, 8.0, 1.0, 1.0, 0.5, 0.5)
 data_to_bounds: Mapping[
     bytes, Mapping[Tuple[int, int], Tuple[IRTypeName, IRKWargsType, IRType]]
 ] = LRUReusedCache(BOUNDS_CACHE_SIZE)
@@ -1679,6 +1681,8 @@ def custom_mutator(data, buffer_size, seed):
             else:
                 min_val = min_value
                 max_val = max_value
+                # we already generating inf via nasty_floats. constrain to real
+                # floats here.
                 if is_inf(min_value, sign=-1.0):
                     min_val = next_up(min_value)
                 if is_inf(min_value, sign=1.0):
@@ -1692,9 +1696,32 @@ def custom_mutator(data, buffer_size, seed):
                 assert not math.isinf(max_val)
                 assert sign_aware_lte(min_val, max_val)
 
-                forced = random_float_between(
-                    min_val, max_val, smallest_nonzero_mag, random=random
-                )
+                origin = 0
+                if min_value is not None:
+                    origin = max(min_value, origin)
+                if max_value is not None:
+                    origin = min(max_value, origin)
+
+                # weight towards smaller floats - like we do for ints, but even
+                # more heavily, as the range can be enormous.
+                diff = max_val - min_val
+                if (
+                    not math.isinf(diff)
+                    and (bits := int(diff).bit_length()) > 18
+                    and random.randint(0, 7) < 7
+                ):
+                    bits = min(
+                        bits, random.choices(FLOAT_SIZES, FLOAT_SIZES_WEIGHTS, k=1)[0]
+                    )
+                    radius = 2 ** (bits - 1) - 1
+                    forced = origin + random_float_between(
+                        -radius, radius, smallest_nonzero_mag, random=random
+                    )
+                    forced = clamp(min_value, forced, max_value)
+                else:
+                    forced = random_float_between(
+                        min_val, max_val, smallest_nonzero_mag, random=random
+                    )
         else:
             raise Exception(f"unhandled case ({ir_type=})")
 
