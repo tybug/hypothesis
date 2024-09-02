@@ -17,7 +17,6 @@ import inspect
 import io
 import math
 import sys
-import tempfile
 import time
 import traceback
 import types
@@ -27,7 +26,6 @@ import zlib
 from collections import defaultdict
 from contextlib import contextmanager
 from functools import partial
-from pathlib import Path
 from random import Random
 from typing import (
     TYPE_CHECKING,
@@ -89,6 +87,7 @@ from hypothesis.internal.compat import (
 from hypothesis.internal.conjecture.data import (
     BYTE_MASKS,
     DRAW_STRING_DEFAULT_MAX_SIZE,
+    NASTY_FLOATS,
     ConjectureData,
     IRKWargsType,
     IRType,
@@ -96,7 +95,6 @@ from hypothesis.internal.conjecture.data import (
     Status,
     bits_to_bytes,
     ir_value_permitted,
-    NASTY_FLOATS,
 )
 from hypothesis.internal.conjecture.engine import (
     BUFFER_SIZE,
@@ -104,10 +102,10 @@ from hypothesis.internal.conjecture.engine import (
     PrimitiveProvider,
 )
 from hypothesis.internal.conjecture.junkdrawer import (
+    clamp,
     ensure_free_stackframes,
     gc_cumulative_time,
     replace_all,
-    clamp,
 )
 from hypothesis.internal.conjecture.shrinker import sort_key
 from hypothesis.internal.conjecture.utils import _calc_p_continue
@@ -119,11 +117,7 @@ from hypothesis.internal.escalation import (
     get_trimmed_traceback,
     is_hypothesis_file,
 )
-from hypothesis.internal.floats import (
-    next_down,
-    next_up,
-    sign_aware_lte,
-)
+from hypothesis.internal.floats import next_down, next_up, sign_aware_lte
 from hypothesis.internal.healthcheck import fail_health_check
 from hypothesis.internal.observability import (
     OBSERVABILITY_COLLECT_COVERAGE,
