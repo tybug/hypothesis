@@ -1664,7 +1664,7 @@ def custom_mutator(data, buffer_size, seed):
                     return False
                 return sign_aware_lte(min_value, f) and sign_aware_lte(f, max_value)
 
-            # draw a "nasty" value with probability 0.03. I think hypothesis uses 0.2,
+            # draw a "nasty" value with probability 0.05. I think hypothesis uses 0.2,
             # but they have a significantly smaller budget and also count duplicates,
             # so we should have a lower p.
             boundary_values = [
@@ -1676,7 +1676,7 @@ def custom_mutator(data, buffer_size, seed):
                 max_value,
             ]
             nasty_floats = [f for f in NASTY_FLOATS + boundary_values if permitted(f)]
-            if random.randint(0, 99) < 3 and nasty_floats:
+            if random.randint(0, 99) < 5 and nasty_floats:
                 forced = random.choice(nasty_floats)
             else:
                 min_val = min_value
