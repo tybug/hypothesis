@@ -1723,8 +1723,11 @@ def custom_mutator(data, buffer_size, seed):
                         min_val, max_val, smallest_nonzero_mag, random=random
                     )
             # with probability 0.05, truncate to an integer-valued float
-            if random.randint(0, 99) < 5 and permitted(
-                truncated := float(math.floor(forced))
+            if (
+                random.randint(0, 99) < 5
+                and not math.isnan(forced)
+                and not math.isinf(forced)
+                and permitted(truncated := float(math.floor(forced)))
             ):
                 forced = truncated
         else:
