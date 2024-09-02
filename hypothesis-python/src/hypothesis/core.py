@@ -1540,6 +1540,8 @@ def custom_mutator(data, buffer_size, seed):
         return splices
 
     replacements = []
+    # TODO with probability 0.2, do only splices (average of 2 maybe?). or sometimes
+    # try splice *ranges* - ranges of ir the same ir types
     for i in mutations:
         start, end = choices[i]
         (ir_type, kwargs, value) = bounds[(start, end)]
@@ -1720,6 +1722,9 @@ def custom_mutator(data, buffer_size, seed):
                     forced = random_float_between(
                         min_val, max_val, smallest_nonzero_mag, random=random
                     )
+                # with probability 0.05, truncate to an integer-valued float
+                if random.randint(0, 99) < 5:
+                    forced = float(math.floor(forced))
         else:
             raise Exception(f"unhandled case ({ir_type=})")
 
