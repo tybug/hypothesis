@@ -1837,8 +1837,16 @@ def custom_mutator(data, buffer_size, seed):
         cd = AtherisData(BUFFER_SIZE, prefix=bytes(BUFFER_SIZE), random=random)
         # overwrite the forced val in the kwargs
         kwargs = {**kwargs, "forced": forced}
-        getattr(cd, f"draw_{ir_type}")(**kwargs)
-        replacement = cd.buffer
+        try:
+            getattr(cd, f"draw_{ir_type}")(**kwargs)
+        except StopTest:
+            assert cd.status is Status.OVERRUN
+            # should hopefully be rare? can happen if we get unlucky with integer
+            # probes or if we increase the size of eg a string. replace with randomness
+            # in this case I guess?
+            replacement = random.randbytes(end - start)
+        else:
+            replacement = cd.buffer
 
         if track_per_item_stats:
             after[i] = _make_serializable(forced)
