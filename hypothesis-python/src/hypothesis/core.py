@@ -1536,7 +1536,7 @@ def mutate_string(value, *, min_size, max_size, intervals, random):
         splice_points = sorted(
             set(
                 [0]
-                + [random.randint(1, len(value) - 1) for _ in range(num_splice)]
+                + [random.randint(1, len(value) - 1) for _ in range(num_splice)] if len(value) > 1 else []
                 + [len(value)]
             )
         )
@@ -1574,6 +1574,22 @@ def mutate_string(value, *, min_size, max_size, intervals, random):
                 # case: insert a new random string at point n
                 # TODO I think this misses inserting at the very end, see len(forced) + 1
                 # case in `while len(forced) < min_size`
+                forced = (
+                    forced[:n]
+                    + _string(min_size=0, average_size=2, max_size=6)
+                    + forced[n:]
+                )
+
+        # if none of this mutation has had any effect, add or delete something
+        # random for certain. this can happen for rather small strings where we don't
+        # have many/any splice_intervals.
+        if forced == value:
+            n = random.randint(0, len(value))
+            if random.randint(0, 1) == 0 and len(value) > 0:
+                # remove everything up to n
+                forced = forced[n:]
+            else:
+                # add a string at n
                 forced = (
                     forced[:n]
                     + _string(min_size=0, average_size=2, max_size=6)
