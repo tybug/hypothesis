@@ -1853,9 +1853,11 @@ def custom_mutator(data, buffer_size, seed):
             )
         replacements.append((start, end, replacement))
 
+    replacements = sorted(replacements, key=lambda v: v[0])
+    offset = max(bounds.keys(), key=lambda v: v[1])[1]
+    for u, v, r in replacements:
+        offset += len(r) - (v - u)
     data = bytearray(replace_all(data, replacements))
-
-    mutation_end = replacements[-1][1] if replacements else 0
     # fully randomize each time in case we misalign and dip into the remaining buffer.
     # we don't want to use the same randomized+saved buffer each time.
     data[mutation_end:] = random.randbytes(len(data[mutation_end:]))
