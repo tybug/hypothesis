@@ -1476,6 +1476,122 @@ def _make_serializable(ir_value):
     return ir_value
 
 
+def mutate_string(value, *, min_size, max_size, intervals, random):
+    if max_size is None:
+        max_size = DRAW_STRING_DEFAULT_MAX_SIZE
+
+    def _char():
+        # bias towards first 256 characters, which is ascii range for the
+        # default st.text()
+        if intervals.size > 256:
+            if random.random() < 0.2:
+                n = random.randint(256, intervals.size - 1)
+            else:
+                n = random.randint(0, 255)
+        else:
+            n = random.randint(0, intervals.size - 1)
+        return chr(intervals[n])
+
+    def _string(*, min_size, max_size, average_size):
+        size = _size(
+            min_size=min_size,
+            max_size=max_size,
+            average_size=average_size,
+            random=random,
+        )
+        return "".join(_char() for _ in range(size))
+
+    # totally random with probability 0.1, more intelligent mutation
+    # othewise
+    if random.randint(0, 9) == 0:
+        # copied from HypothesisProvider.draw_string
+        average_size = min(
+            max(min_size * 2, min_size + 5),
+            0.5 * (min_size + max_size),
+        )
+        forced = _string(
+            min_size=min_size, max_size=max_size, average_size=average_size
+        )
+    else:
+        # pick n splice points. for each [n1, n2] interval, do one of:
+        # * delete it
+        # * swap it with another interval
+        # * replace it with another interval
+        # * replace it with a new random string
+        #
+        # for each splice point n1:
+        # * with some ~low probability, insert a new random string at n1
+        #
+        # the latter is not covered by the interval operators as the interval
+        # operators have no way to introduce new characters without otherwise
+        # modifying the string (but they do for removing characters).
+        # ~equivalently this could be an operation on the start point of
+        # each interval.
+        num_splice = _size(
+            min_size=min(1, len(value)),
+            max_size=len(value),
+            average_size=min(2, len(value)),
+            random=random,
+        )
+        splice_points = sorted(
+            set(
+                [0]
+                + [random.randint(1, len(value) - 1) for _ in range(num_splice)]
+                + [len(value)]
+            )
+        )
+        splice_intervals = list(zip(splice_points, splice_points[1:]))
+        # (n1, n2): new_string. use a dict to allow overwriting operators
+        # for the same splice interval lest size changes get the better of us.
+        replacements = {}
+        for n1, n2 in splice_intervals:
+            r = random.randint(0, 3)
+            if r == 0:
+                # case: delete this interval
+                replacements[(n1, n2)] = ""
+            elif r == 1:
+                # case: swap with another interval
+                (a1, a2) = random.choice(splice_intervals)
+                replacements[(n1, n2)] = value[a1:a2]
+                replacements[(a1, a2)] = value[n1:n2]
+            elif r == 2:
+                # case: replace with another interval
+                (a1, a2) = random.choice(splice_intervals)
+                replacements[(n1, n2)] = value[a1:a2]
+            elif r == 3:
+                # case: replace with a new random string of ~similar size
+                replacements[(n1, n2)] = _string(
+                    min_size=0, average_size=n2 - n1, max_size=(n2 - n1) * 3
+                )
+            else:
+                raise ValueError(f"unhandled case {r=}")
+
+        replacements = [(n1, n2, value) for (n1, n2), value in replacements.items()]
+        forced = "".join(replace_all(value, replacements))
+
+        for n in splice_points:
+            if random.randint(0, 10) == 0:
+                # case: insert a new random string at point n
+                # TODO I think this misses inserting at the very end, see len(forced) + 1
+                # case in `while len(forced) < min_size`
+                forced = (
+                    forced[:n]
+                    + _string(min_size=0, average_size=2, max_size=6)
+                    + forced[n:]
+                )
+
+        while len(forced) < min_size:
+            add_idx = random.choice(list(range(len(forced) + 1)))
+            forced = forced[:add_idx] + _char() + forced[add_idx:]
+        while len(forced) > max_size:
+            # remove random indices to bring us back to max_size
+            remove_idx = random.choice(list(range(len(forced))))
+            forced = forced[:remove_idx] + forced[remove_idx + 1 :]
+
+    assert min_size <= len(forced) <= max_size
+    return forced
+
+
 def custom_mutator(data, buffer_size, seed):
     t_start = time.time()
     statistics["num_calls"] += 1
@@ -1611,39 +1727,13 @@ def custom_mutator(data, buffer_size, seed):
             size = kwargs["size"]
             forced = random.randbytes(size)
         elif ir_type == "string":
-            intervals = kwargs["intervals"]
-            min_size = kwargs["min_size"]
-            max_size = kwargs["max_size"]
-
-            if max_size is None:
-                max_size = DRAW_STRING_DEFAULT_MAX_SIZE
-
-            # copied from HypothesisProvider.draw_string
-            average_size = min(
-                max(min_size * 2, min_size + 5),
-                0.5 * (min_size + max_size),
-            )
-            size = _size(
-                min_size=min_size,
-                max_size=max_size,
-                average_size=average_size,
+            forced = mutate_string(
+                value,
+                min_size=kwargs["min_size"],
+                max_size=kwargs["max_size"],
+                intervals=kwargs["intervals"],
                 random=random,
             )
-
-            # TODO more intelligent string mutation, choose subsets to modify
-            # TODO apply similar logic to draw_bytes
-            forced = ""
-            for _ in range(size):
-                # bias towards first 256 characters, which is ascii range for the
-                # default st.text()
-                if intervals.size > 256:
-                    if random.random() < 0.2:
-                        n = random.randint(256, intervals.size - 1)
-                    else:
-                        n = random.randint(0, 255)
-                else:
-                    n = random.randint(0, intervals.size - 1)
-                forced += chr(intervals[n])
         elif ir_type == "float":
             min_value = kwargs["min_value"]
             max_value = kwargs["max_value"]
