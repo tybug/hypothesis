@@ -1860,7 +1860,10 @@ def custom_mutator(data, buffer_size, seed):
     data = bytearray(replace_all(data, replacements))
     # fully randomize each time in case we misalign and dip into the remaining buffer.
     # we don't want to use the same randomized+saved buffer each time.
-    data[mutation_end:] = random.randbytes(len(data[mutation_end:]))
+    # this weirdness is to allow libfuzzer to REDUCE our inputs instead of always
+    # being the same BUFFER_SIZE size.
+    del data[offset:]
+    data += random.randbytes(BUFFER_SIZE // 2)
     if len(data) > BUFFER_SIZE:
         data = data[:BUFFER_SIZE]
     data = bytes(data)
