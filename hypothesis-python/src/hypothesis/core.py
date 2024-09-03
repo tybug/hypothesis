@@ -1529,8 +1529,8 @@ def mutate_string(value, *, min_size, max_size, intervals, random):
         # each interval.
         num_splice = _size(
             min_size=min(1, len(value)),
-            max_size=len(value),
-            average_size=min(2, len(value)),
+            max_size=4,
+            average_size=min(1.5, len(value)),
             random=random,
         )
         splice_points = sorted(
@@ -1561,7 +1561,7 @@ def mutate_string(value, *, min_size, max_size, intervals, random):
             elif r == 3:
                 # case: replace with a new random string of ~similar size
                 replacements[(n1, n2)] = _string(
-                    min_size=0, average_size=n2 - n1, max_size=(n2 - n1) * 3
+                    min_size=0, average_size=n2 - n1, max_size=(n2 - n1) * 2
                 )
             else:
                 raise ValueError(f"unhandled case {r=}")
@@ -1586,13 +1586,13 @@ def mutate_string(value, *, min_size, max_size, intervals, random):
         if forced == value:
             n = random.randint(0, len(value))
             if random.randint(0, 1) == 0 and len(value) > 0:
-                # remove everything up to n
-                forced = forced[n:]
+                # remove everything up to n, or after n
+                forced = forced[n:] if random.randint(0, 1) == 0 else forced[:n]
             else:
                 # add a string at n
                 forced = (
                     forced[:n]
-                    + _string(min_size=0, average_size=2, max_size=6)
+                    + _string(min_size=0, average_size=2, max_size=4)
                     + forced[n:]
                 )
 
