@@ -58,11 +58,10 @@ def replace_all(
 
     Replacements is a list of (start, end, value) triples.
     """
-
     result: List[T] = []
     prev = 0
     offset = 0
-    for u, v, r in replacements:
+    for u, v, r in sorted(replacements, key=lambda v: v[0]):
         result.extend(ls[prev:u])
         result.extend(r)
         prev = v

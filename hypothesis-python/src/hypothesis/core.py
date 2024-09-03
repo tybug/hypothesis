@@ -1747,7 +1747,6 @@ def custom_mutator(data, buffer_size, seed):
             )
         replacements.append((start, end, replacement))
 
-    replacements = sorted(replacements, key=lambda start_end_value: start_end_value[0])
     data = bytearray(replace_all(data, replacements))
 
     mutation_end = replacements[-1][1] if replacements else 0
