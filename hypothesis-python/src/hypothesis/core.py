@@ -1634,8 +1634,7 @@ def custom_mutator(data, buffer_size, seed):
     try:
         bounds = data_to_bounds[data]
     except KeyError:
-        # we haven't seen this data before. either I messed up the code (possible)
-        # or atheris is trying a fresh input.
+        # we haven't seen this data before. atheris is trying a fresh input.
         return _fresh()
     if track_per_item_stats:
         stats["mode"] = "mutate"
