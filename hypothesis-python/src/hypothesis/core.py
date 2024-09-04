@@ -1495,7 +1495,7 @@ def _make_serializable(ir_value):
     return ir_value
 
 
-def random_integer(*, min_value, max_value, random):
+def _mutate_integer(*, min_value, max_value, random):
     # roughly equivalent to shrink_towards in draw_integer, but without
     # shrinking semantics.
     origin = 0
@@ -1551,8 +1551,8 @@ def random_integer(*, min_value, max_value, random):
     return forced
 
 
-def nearby_integer(value, *, min_value, max_value, random):
-    r = 100 // 2
+def nearby_number(value, *, min_value, max_value, random_value):
+    r = 100 / 2
     min_point = value - r
     max_point = value + r
     if min_value is not None:
@@ -1560,7 +1560,7 @@ def nearby_integer(value, *, min_value, max_value, random):
     if max_value is not None:
         max_point = min(max_value, max_point)
 
-    forced = random.randint(min_point, max_point)
+    forced = random_value(min_point, max_point)
     assert min_value is None or min_value <= forced
     assert max_value is None or forced <= max_value
     return forced
@@ -1576,16 +1576,57 @@ def mutate_integer(value, *, min_value, max_value, random):
         )
         and random.randint(0, 10) == 0
     ):
-        forced = nearby_integer(
-            value, min_value=min_value, max_value=max_value, random=random
+
+        def random_value(min_point, max_point):
+            return random.randint(int(min_point), int(max_point))
+
+        forced = nearby_number(
+            value,
+            min_value=min_value,
+            max_value=max_value,
+            random_value=random_value,
         )
     else:
-        forced = random_integer(min_value=min_value, max_value=max_value, random=random)
+        forced = _mutate_integer(
+            min_value=min_value, max_value=max_value, random=random
+        )
     return forced
 
 
 def mutate_float(
     value, *, min_value, max_value, allow_nan, smallest_nonzero_magnitude, random
+):
+    # with some probability, draw in a small area around the previous value.
+    if (
+        (max_value - min_value) >= 300
+        and not math.isinf(value)
+        and not math.isnan(value)
+        and random.randint(0, 10) == 0
+    ):
+        def random_value(min_point, max_point):
+            return random_float_between(
+                min_point, max_point, smallest_nonzero_magnitude, random=random
+            )
+
+        forced = nearby_number(
+            value,
+            min_value=min_value,
+            max_value=max_value,
+            random_value=random_value,
+        )
+    else:
+        forced = _mutate_float(
+            min_value=min_value,
+            max_value=max_value,
+            allow_nan=allow_nan,
+            smallest_nonzero_magnitude=smallest_nonzero_magnitude,
+            random=random,
+        )
+    return forced
+
+
+def _mutate_float(
+    *, min_value, max_value, allow_nan, smallest_nonzero_magnitude, random
 ):
     def is_inf(value, *, sign):
         return math.copysign(1.0, value) == sign and math.isinf(value)

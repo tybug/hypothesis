@@ -8,6 +8,7 @@ from hypothesis.internal.intervalsets import IntervalSet
 import uuid
 import math
 from hypothesis.internal.reflection import get_pretty_function_description
+from hypothesis.internal.floats import SMALLEST_SUBNORMAL, next_up, next_down
 
 from tests.conjecture.common import run_to_buffer
 from tests.common.utils import flaky
@@ -118,7 +119,7 @@ def test_can_find_endpoints(min_value, max_value):
 @pytest.mark.parametrize(
     "min_offset, max_offset", [(None, None), (1234, None), (None, 1234), (1234, 1234)]
 )
-@flaky(max_runs=5, min_passes=1)
+@flaky(max_runs=3, min_passes=1)
 def test_can_find_nearby_integers(target, offset, min_offset, max_offset):
     min_value = None if min_offset is None else target - min_offset
     max_value = None if max_offset is None else target + max_offset
@@ -138,9 +139,53 @@ def test_can_find_nearby_integers(target, offset, min_offset, max_offset):
 
     # atheris should find this and baseline shouldn't.
     with pytest.raises(AssertionError, match=MARKER):
-        fuzz(f, start=start, mode="atheris", max_examples=2_000)
+        fuzz(f, start=start, mode="atheris", max_examples=1_000)
 
-    fuzz(f, start=start, mode="baseline", max_examples=2_000)
+    fuzz(f, start=start, mode="baseline", max_examples=1_000)
+
+
+@pytest.mark.parametrize(
+    "target, offset",
+    [(192837123, 8), (-8712313, 4), (918273, 2), (-94823, -2), (912873192312387, -5)],
+)
+@pytest.mark.parametrize(
+    "min_offset, max_offset", [(None, None), (1234, None), (None, 1234), (1234, 1234)]
+)
+@flaky(max_runs=3, min_passes=1)
+def test_can_find_nearby_floats(target, offset, min_offset, max_offset):
+    min_value = next_up(-math.inf) if min_offset is None else float(target - min_offset)
+    max_value = (
+        next_down(math.inf) if max_offset is None else float(target + max_offset)
+    )
+
+    @settings(database=None)
+    @given(
+        st.floats(
+            min_value=min_value,
+            max_value=max_value,
+            allow_nan=False,
+            allow_infinity=False,
+        )
+    )
+    def f(n):
+        # we're never going to hit the offset exactly with floats. just get close.
+        assert abs(n - (target + offset)) > 1.5, MARKER
+
+    @run_to_buffer
+    def start(data):
+        data.draw_float(
+            min_value=min_value,
+            max_value=max_value,
+            allow_nan=False,
+            smallest_nonzero_magnitude=SMALLEST_SUBNORMAL,
+            forced=target,
+        )
+        data.mark_interesting()
+
+    with pytest.raises(AssertionError, match=MARKER):
+        fuzz(f, start=start, mode="atheris", max_examples=1_000)
+
+    fuzz(f, start=start, mode="baseline", max_examples=1_000)
 
 
 @pytest.mark.parametrize(
