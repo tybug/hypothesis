@@ -24,12 +24,12 @@ from hypothesis import (
     strategies as st,
 )
 from hypothesis.errors import InvalidArgument
-from hypothesis.internal.cache import GenericCache, LRUReusedCache
+from hypothesis.internal.cache import GenericCache, LRUCache, LRUReusedCache
 
 from tests.common.utils import skipif_emscripten
 
 
-class LRUCache(GenericCache):
+class LRUCacheAlternative(GenericCache):
     __slots__ = ("__tick",)
 
     def __init__(self, max_size):
@@ -56,14 +56,18 @@ class LFUCache(GenericCache):
 
 
 @st.composite
-def write_pattern(draw, min_size=0):
-    keys = draw(st.lists(st.integers(0, 1000), unique=True, min_size=1))
-    values = draw(st.lists(st.integers(), unique=True, min_size=1))
-    return draw(
-        st.lists(
-            st.tuples(st.sampled_from(keys), st.sampled_from(values)), min_size=min_size
-        )
+def write_pattern(draw, min_distinct_keys=0):
+    keys = draw(
+        st.lists(st.integers(0, 1000), unique=True, min_size=max(min_distinct_keys, 1))
     )
+    values = draw(st.lists(st.integers(), unique=True, min_size=1))
+    s = st.lists(
+        st.tuples(st.sampled_from(keys), st.sampled_from(values)),
+        min_size=min_distinct_keys,
+    )
+    if min_distinct_keys > 0:
+        s = s.filter(lambda ls: len({k for k, _ in ls}) >= min_distinct_keys)
+    return draw(s)
 
 
 class ValueScored(GenericCache):
@@ -84,7 +88,8 @@ class RandomCache(GenericCache):
 
 
 @pytest.mark.parametrize(
-    "implementation", [LRUCache, LFUCache, LRUReusedCache, ValueScored, RandomCache]
+    "implementation",
+    [LRUCache, LFUCache, LRUReusedCache, ValueScored, RandomCache, LRUCacheAlternative],
 )
 @example(writes=[(0, 0), (3, 0), (1, 0), (2, 0), (2, 0), (1, 0)], size=4)
 @example(writes=[(0, 0)], size=1)
@@ -111,8 +116,12 @@ def test_behaves_like_a_dict_with_losses(implementation, writes, size):
         assert len(target) <= min(len(model), size)
 
 
-@settings(suppress_health_check=[HealthCheck.too_slow], deadline=None)
-@given(write_pattern(min_size=2), st.data())
+@settings(
+    suppress_health_check={HealthCheck.too_slow}
+    | set(settings.get_profile(settings._current_profile).suppress_health_check),
+    deadline=None,
+)
+@given(write_pattern(min_distinct_keys=2), st.data())
 def test_always_evicts_the_lowest_scoring_value(writes, data):
     scores = {}
 
@@ -298,6 +307,15 @@ def test_iterates_over_remaining_keys():
     for i in range(3):
         cache[i] = "hi"
     assert sorted(cache) == [1, 2]
+
+
+def test_lru_cache_is_actually_lru():
+    cache = LRUCache(2)
+    cache[1] = 1  # [1]
+    cache[2] = 2  # [1, 2]
+    cache[1]  # [2, 1]
+    cache[3] = 2  # [2, 1, 3] -> drop least recently used -> [1, 3]
+    assert list(cache) == [1, 3]
 
 
 @skipif_emscripten

@@ -85,6 +85,12 @@ from hypothesis.internal.compat import (
     int_to_bytes,
 )
 from hypothesis.internal.conjecture.data import (
+    ConjectureData,
+    PrimitiveProvider,
+    Status,
+)
+from hypothesis.internal.conjecture.engine import BUFFER_SIZE, ConjectureRunner
+from hypothesis.internal.conjecture.data import (
     BYTE_MASKS,
     DRAW_STRING_DEFAULT_MAX_SIZE,
     NASTY_FLOATS,
@@ -1159,9 +1165,27 @@ class StateForActualGivenExecution:
                     timing=self._timing_features,
                     coverage=tractable_coverage_report(trace) or None,
                     phase=phase,
+                    backend_metadata=data.provider.observe_test_case(),
                 )
                 deliver_json_blob(tc)
+                for msg in data.provider.observe_information_messages(
+                    lifetime="test_case"
+                ):
+                    self._deliver_information_message(**msg)
             self._timing_features = {}
+
+    def _deliver_information_message(
+        self, *, type: str, title: str, content: Union[str, dict]
+    ) -> None:
+        deliver_json_blob(
+            {
+                "type": type,
+                "run_start": self._start_timestamp,
+                "property": self.test_identifier,
+                "title": title,
+                "content": content,
+            }
+        )
 
     def run_engine(self):
         """Run the test function many times, on database input and generated
@@ -1187,15 +1211,16 @@ class StateForActualGivenExecution:
         # on different inputs.
         runner.run()
         note_statistics(runner.statistics)
-        deliver_json_blob(
-            {
-                "type": "info",
-                "run_start": self._start_timestamp,
-                "property": self.test_identifier,
-                "title": "Hypothesis Statistics",
-                "content": describe_statistics(runner.statistics),
-            }
-        )
+        if TESTCASE_CALLBACKS:
+            self._deliver_information_message(
+                type="info",
+                title="Hypothesis Statistics",
+                content=describe_statistics(runner.statistics),
+            )
+            for msg in (
+                p if isinstance(p := runner.provider, PrimitiveProvider) else p(None)
+            ).observe_information_messages(lifetime="test_function"):
+                self._deliver_information_message(**msg)
 
         if runner.call_count == 0:
             return
