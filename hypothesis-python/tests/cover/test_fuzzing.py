@@ -13,6 +13,8 @@ from tests.common.utils import flaky
 
 MARKER = uuid.uuid4().hex
 
+# stop hypothesis from seeding our random
+r = Random(random.randint(0, int(1e10)))
 
 def fuzz(f, *, start, mode, max_examples):
     fuzz_one_input = f.hypothesis._get_fuzz_target(
@@ -21,11 +23,10 @@ def fuzz(f, *, start, mode, max_examples):
     fuzz_one_input(start)
     for _ in range(max_examples):
         if mode == "atheris":
-            r = Random(random.randint(0, int(1e10)))
             # avoid our blackbox for num_calls < 100
             mutated = custom_mutator(start, random=r, num_calls=100)
         if mode == "baseline":
-            mutated = random.randbytes(BUFFER_SIZE)
+            mutated = r.randbytes(BUFFER_SIZE)
         fuzz_one_input(mutated)
 
 
