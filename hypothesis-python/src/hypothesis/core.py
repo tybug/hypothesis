@@ -1736,7 +1736,11 @@ def mutate_string(value, *, min_size, max_size, intervals, random):
     return forced
 
 
-def custom_mutator(data, buffer_size, seed):
+def _custom_mutator(data, buffer_size, seed):
+    return custom_mutator(data, random=Random(seed), num_calls=statistics["num_calls"])
+
+
+def custom_mutator(data, *, random, num_calls):
     t_start = time.time()
     statistics["num_calls"] += 1
     # custom_mutator should be called by atheris exactly once per test case.
@@ -1746,7 +1750,6 @@ def custom_mutator(data, buffer_size, seed):
     custom_mutator_called = True
 
     stats = {}
-    random = Random(seed)
 
     def _fresh():
         stats["mode"] = "fresh"
@@ -1756,7 +1759,7 @@ def custom_mutator(data, buffer_size, seed):
 
     # blackbox exploratory/warmup phase for the first 100 inputs
     # TODO we probably want an adaptive tradeoff here, "blackbox until n consecutive uninteresting inputs"
-    if statistics["num_calls"] < 100:
+    if num_calls < 100:
         return _fresh()
 
     try:
@@ -1987,7 +1990,7 @@ class HypothesisHandle:
             kwargs=kwargs,
             use_atheris=True,
         )
-        atheris.Setup(argv, fuzz_one_input, custom_mutator=custom_mutator)
+        atheris.Setup(argv, fuzz_one_input, custom_mutator=_custom_mutator)
         atheris.Fuzz()
 
 
