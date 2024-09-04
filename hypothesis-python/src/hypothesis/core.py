@@ -1667,7 +1667,7 @@ def mutate_string(value, *, min_size, max_size, intervals, random):
     if max_size is None:
         max_size = COLLECTION_DEFAULT_MAX_SIZE
 
-    def _char():
+    def _element():
         # bias towards first 256 characters, which is ascii range for the
         # default st.text()
         if intervals.size > 256:
@@ -1679,26 +1679,25 @@ def mutate_string(value, *, min_size, max_size, intervals, random):
             n = random.randint(0, intervals.size - 1)
         return chr(intervals[n])
 
-    def _string(*, min_size, max_size, average_size):
+    def _value(*, min_size, max_size, average_size):
         size = _size(
             min_size=min_size,
             max_size=max_size,
             average_size=average_size,
             random=random,
         )
-        return "".join(_char() for _ in range(size))
+        return "".join(_element() for _ in range(size))
 
     # totally random with probability 0.1, more intelligent mutation
-    # otherwise
+    # otherwise. This is me being scared of not being able to get out of small
+    # size collections like the empty string, because there's nothing to mutate.
     if random.randint(0, 9) == 0:
         # copied from HypothesisProvider.draw_string
         average_size = min(
             max(min_size * 2, min_size + 5),
             0.5 * (min_size + max_size),
         )
-        forced = _string(
-            min_size=min_size, max_size=max_size, average_size=average_size
-        )
+        forced = _value(min_size=min_size, max_size=max_size, average_size=average_size)
     else:
         # pick n splice points. for each [n1, n2] interval, do one of:
         # * delete it
@@ -1751,7 +1750,7 @@ def mutate_string(value, *, min_size, max_size, intervals, random):
                 replacements[(n1, n2)] = value[a1:a2]
             elif r == 3:
                 # case: replace with a new random string of ~similar size
-                replacements[(n1, n2)] = _string(
+                replacements[(n1, n2)] = _value(
                     min_size=0, average_size=n2 - n1, max_size=(n2 - n1) * 2
                 )
             else:
@@ -1767,7 +1766,7 @@ def mutate_string(value, *, min_size, max_size, intervals, random):
                 # case in `while len(forced) < min_size`
                 forced = (
                     forced[:n]
-                    + _string(min_size=0, average_size=2, max_size=6)
+                    + _value(min_size=0, average_size=2, max_size=6)
                     + forced[n:]
                 )
 
@@ -1783,13 +1782,13 @@ def mutate_string(value, *, min_size, max_size, intervals, random):
                 # add a string at n
                 forced = (
                     forced[:n]
-                    + _string(min_size=0, average_size=2, max_size=4)
+                    + _value(min_size=0, average_size=2, max_size=4)
                     + forced[n:]
                 )
 
         while len(forced) < min_size:
             add_idx = random.choice(list(range(len(forced) + 1)))
-            forced = forced[:add_idx] + _char() + forced[add_idx:]
+            forced = forced[:add_idx] + _element() + forced[add_idx:]
         while len(forced) > max_size:
             # remove random indices to bring us back to max_size
             remove_idx = random.choice(list(range(len(forced))))
