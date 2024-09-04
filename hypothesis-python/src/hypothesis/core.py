@@ -1663,30 +1663,20 @@ def mutate_float(
     return forced
 
 
-def mutate_string(value, *, min_size, max_size, intervals, random):
+def mutate_collection(value, *, min_size, max_size, draw_element, random):
     if max_size is None:
         max_size = COLLECTION_DEFAULT_MAX_SIZE
 
-    def _element():
-        # bias towards first 256 characters, which is ascii range for the
-        # default st.text()
-        if intervals.size > 256:
-            if random.random() < 0.2:
-                n = random.randint(256, intervals.size - 1)
-            else:
-                n = random.randint(0, 255)
-        else:
-            n = random.randint(0, intervals.size - 1)
-        return chr(intervals[n])
+    value = list(value)
 
-    def _value(*, min_size, max_size, average_size):
+    def draw_value(*, min_size, max_size, average_size):
         size = _size(
             min_size=min_size,
             max_size=max_size,
             average_size=average_size,
             random=random,
         )
-        return "".join(_element() for _ in range(size))
+        return [draw_element() for _ in range(size)]
 
     # totally random with probability 0.1, more intelligent mutation
     # otherwise. This is me being scared of not being able to get out of small
@@ -1697,7 +1687,9 @@ def mutate_string(value, *, min_size, max_size, intervals, random):
             max(min_size * 2, min_size + 5),
             0.5 * (min_size + max_size),
         )
-        forced = _value(min_size=min_size, max_size=max_size, average_size=average_size)
+        forced = draw_value(
+            min_size=min_size, max_size=max_size, average_size=average_size
+        )
     else:
         # pick n splice points. for each [n1, n2] interval, do one of:
         # * delete it
@@ -1714,21 +1706,13 @@ def mutate_string(value, *, min_size, max_size, intervals, random):
         # ~equivalently this could be an operation on the start point of
         # each interval.
         num_splice = _size(
-            min_size=min(1, len(value)),
-            max_size=4,
-            average_size=min(1.5, len(value)),
+            min_size=min(2, len(value)),
+            max_size=5,
+            average_size=min(2.5, len(value)),
             random=random,
         )
         splice_points = sorted(
-            set(
-                [0]
-                + (
-                    [random.randint(1, len(value) - 1) for _ in range(num_splice)]
-                    if len(value) > 1
-                    else []
-                )
-                + [len(value)]
-            )
+            {random.randint(0, len(value)) for _ in range(num_splice)}
         )
         splice_intervals = list(zip(splice_points, splice_points[1:]))
         # (n1, n2): new_string. use a dict to allow overwriting operators
@@ -1738,35 +1722,32 @@ def mutate_string(value, *, min_size, max_size, intervals, random):
             r = random.randint(0, 3)
             if r == 0:
                 # case: delete this interval
-                replacements[(n1, n2)] = ""
-            elif r == 1:
+                replacements[(n1, n2)] = []
+            elif r == 1 and len(splice_intervals) > 1:
                 # case: swap with another interval
                 (a1, a2) = random.choice(splice_intervals)
                 replacements[(n1, n2)] = value[a1:a2]
                 replacements[(a1, a2)] = value[n1:n2]
-            elif r == 2:
+            elif r == 2 and len(splice_intervals) > 1:
                 # case: replace with another interval
                 (a1, a2) = random.choice(splice_intervals)
                 replacements[(n1, n2)] = value[a1:a2]
             elif r == 3:
                 # case: replace with a new random string of ~similar size
-                replacements[(n1, n2)] = _value(
+                replacements[(n1, n2)] = draw_value(
                     min_size=0, average_size=n2 - n1, max_size=(n2 - n1) * 2
                 )
-            else:
-                raise ValueError(f"unhandled case {r=}")
 
         replacements = [(n1, n2, value) for (n1, n2), value in replacements.items()]
-        forced = "".join(replace_all(value, replacements))
-
+        forced = replace_all(value, replacements)
         for n in splice_points:
             if random.randint(0, 10) == 0:
-                # case: insert a new random string at point n
+                # case: insert a new random value at point n
                 # TODO I think this misses inserting at the very end, see len(forced) + 1
                 # case in `while len(forced) < min_size`
                 forced = (
                     forced[:n]
-                    + _value(min_size=0, average_size=2, max_size=6)
+                    + draw_value(min_size=0, average_size=2, max_size=6)
                     + forced[n:]
                 )
 
@@ -1782,13 +1763,13 @@ def mutate_string(value, *, min_size, max_size, intervals, random):
                 # add a string at n
                 forced = (
                     forced[:n]
-                    + _value(min_size=0, average_size=2, max_size=4)
+                    + draw_value(min_size=0, average_size=2, max_size=4)
                     + forced[n:]
                 )
 
         while len(forced) < min_size:
             add_idx = random.choice(list(range(len(forced) + 1)))
-            forced = forced[:add_idx] + _element() + forced[add_idx:]
+            forced = forced[:add_idx] + [draw_element()] + forced[add_idx:]
         while len(forced) > max_size:
             # remove random indices to bring us back to max_size
             remove_idx = random.choice(list(range(len(forced))))
@@ -1796,6 +1777,45 @@ def mutate_string(value, *, min_size, max_size, intervals, random):
 
     assert min_size <= len(forced) <= max_size
     return forced
+
+
+def mutate_string(value, *, min_size, max_size, intervals, random):
+    def draw_element():
+        # bias towards first 256 characters, which is ascii range for the
+        # default st.text()
+        if intervals.size > 256:
+            if random.random() < 0.2:
+                n = random.randint(256, intervals.size - 1)
+            else:
+                n = random.randint(0, 255)
+        else:
+            n = random.randint(0, intervals.size - 1)
+        return chr(intervals[n])
+
+    return "".join(
+        mutate_collection(
+            value,
+            min_size=min_size,
+            max_size=max_size,
+            draw_element=draw_element,
+            random=random,
+        )
+    )
+
+
+def mutate_bytes(value, *, min_size, max_size, random):
+    def draw_element():
+        return random.randint(0, 255)
+
+    return bytes(
+        mutate_collection(
+            value,
+            min_size=min_size,
+            max_size=max_size,
+            draw_element=draw_element,
+            random=random,
+        )
+    )
 
 
 def _custom_mutator(data, buffer_size, seed):
@@ -1893,8 +1913,12 @@ def custom_mutator(data, *, random, num_calls):
             assert 0 < p < 1
             forced = bool(random.randint(0, 1))
         elif ir_type == "bytes":
-            size = kwargs["size"]
-            forced = random.randbytes(size)
+            forced = mutate_bytes(
+                value,
+                min_size=kwargs["min_size"],
+                max_size=kwargs["max_size"],
+                random=random,
+            )
         elif ir_type == "string":
             forced = mutate_string(
                 value,
