@@ -119,9 +119,8 @@ def test_can_splice_strings(target):
 
     # atheris should find this and baseline shouldn't.
     with pytest.raises(AssertionError):
-        fuzz(f, start=start, mode="atheris", max_examples=5_000)
+        fuzz(f, start=start, mode="atheris", max_examples=10_000)
 
     # hypothesis does a good job of finding small strings in the ascii range.
     if len(target) > 1:
-        fuzz(f, start=start, mode="baseline", max_examples=5_000)
-
+        fuzz(f, start=start, mode="baseline", max_examples=10_000)
