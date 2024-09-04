@@ -85,14 +85,8 @@ from hypothesis.internal.compat import (
     int_to_bytes,
 )
 from hypothesis.internal.conjecture.data import (
-    ConjectureData,
-    PrimitiveProvider,
-    Status,
-)
-from hypothesis.internal.conjecture.engine import BUFFER_SIZE, ConjectureRunner
-from hypothesis.internal.conjecture.data import (
     BYTE_MASKS,
-    DRAW_STRING_DEFAULT_MAX_SIZE,
+    COLLECTION_DEFAULT_MAX_SIZE,
     NASTY_FLOATS,
     ConjectureData,
     IRKWargsType,
@@ -1671,7 +1665,7 @@ def mutate_float(
 
 def mutate_string(value, *, min_size, max_size, intervals, random):
     if max_size is None:
-        max_size = DRAW_STRING_DEFAULT_MAX_SIZE
+        max_size = COLLECTION_DEFAULT_MAX_SIZE
 
     def _char():
         # bias towards first 256 characters, which is ascii range for the
