@@ -1476,7 +1476,7 @@ def _make_serializable(ir_value):
     return ir_value
 
 
-def mutate_integer(value, *, min_value, max_value, random):
+def random_integer(*, min_value, max_value, random):
     # roughly equivalent to shrink_towards in draw_integer, but without
     # shrinking semantics.
     origin = 0
@@ -1518,6 +1518,50 @@ def mutate_integer(value, *, min_value, max_value, random):
             forced = clamp(min_value, forced, max_value)
         else:
             forced = random.randint(min_value, max_value)
+
+        # right now we get integer endpoints for free because hypothesis draws
+        # two integers for st.integers, one of which controls this endpoint.
+        # once we roll that into a single call we'll need to introduce this.
+        # if (max_value - min_value > 300) and (r := random.randint(0, 100)) < 4:
+        #     forced = {
+        #         0: min_value,
+        #         1: min_value + 1,
+        #         2: max_value - 1,
+        #         3: max_value
+        #     }[r]
+    return forced
+
+
+def nearby_integer(value, *, min_value, max_value, random):
+    r = 100 // 2
+    min_point = value - r
+    max_point = value + r
+    if min_value is not None:
+        min_point = max(min_value, min_point)
+    if max_value is not None:
+        max_point = min(max_value, max_point)
+
+    forced = random.randint(min_point, max_point)
+    assert min_value is None or min_value <= forced
+    assert max_value is None or forced <= max_value
+    return forced
+
+
+def mutate_integer(value, *, min_value, max_value, random):
+    # with some probability, draw in a small area around the previous value.
+    if (
+        not (
+            min_value is not None
+            and max_value is not None
+            and (max_value - min_value) < 300
+        )
+        and random.randint(0, 10) == 0
+    ):
+        forced = nearby_integer(
+            value, min_value=min_value, max_value=max_value, random=random
+        )
+    else:
+        forced = random_integer(min_value=min_value, max_value=max_value, random=random)
     return forced
 
 
