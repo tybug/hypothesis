@@ -17,6 +17,7 @@ MARKER = uuid.uuid4().hex
 # stop hypothesis from seeding our random
 r = Random(random.randint(0, int(1e10)))
 
+
 def fuzz(f, *, start, mode, max_examples):
     fuzz_one_input = f.hypothesis._get_fuzz_target(
         args=(), kwargs={}, use_atheris=mode == "atheris"
@@ -173,5 +174,38 @@ def test_can_splice_strings(target):
         fuzz(f, start=start, mode="atheris", max_examples=10_000)
 
     # hypothesis does a good job of finding small strings in the ascii range.
+    if len(target) > 1:
+        fuzz(f, start=start, mode="baseline", max_examples=10_000)
+
+
+@pytest.mark.parametrize(
+    "target",
+    # copying another interval
+    [b"xXaaxX", b"bbxXxX", b"axXaxX", b"bbaaaa"] +
+    # copying two intervals (TODO this is very flaky)
+    # [b"xXxXxX"] +
+    # deleting an interval
+    [b"bbaax", b"bbaa", b"bba", b"bb", b"b", b"", b"bbX", b"axX"],
+    # TODO tests for inserting a new value / replacing an interval with a new value
+)
+@flaky(max_runs=3, min_passes=1)
+def test_can_splice_bytes(target):
+    @settings(database=None)
+    @given(st.binary())
+    def f(s):
+        assert s != target, MARKER
+
+    @run_to_buffer
+    def start(data):
+        data.draw_bytes(
+            min_size=0,
+            max_size=math.inf,
+            forced=b"bbaaxX",
+        )
+        data.mark_interesting()
+
+    with pytest.raises(AssertionError, match=MARKER):
+        fuzz(f, start=start, mode="atheris", max_examples=10_000)
+
     if len(target) > 1:
         fuzz(f, start=start, mode="baseline", max_examples=10_000)
