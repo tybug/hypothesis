@@ -134,7 +134,7 @@ def test_can_find_nearby_integers(target, offset, min_offset, max_offset):
         data.mark_interesting()
 
     # atheris should find this and baseline shouldn't.
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError, match=MARKER):
         fuzz(f, start=start, mode="atheris", max_examples=2_000)
 
     fuzz(f, start=start, mode="baseline", max_examples=2_000)
@@ -155,7 +155,7 @@ def test_can_splice_strings(target):
     @settings(database=None)
     @given(st.text())
     def f(s):
-        assert s != target
+        assert s != target, MARKER
 
     @run_to_buffer
     def start(data):
@@ -167,7 +167,7 @@ def test_can_splice_strings(target):
         )
         data.mark_interesting()
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError, match=MARKER):
         fuzz(f, start=start, mode="atheris", max_examples=10_000)
 
     # hypothesis does a good job of finding small strings in the ascii range.
