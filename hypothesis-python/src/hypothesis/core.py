@@ -1536,7 +1536,11 @@ def mutate_string(value, *, min_size, max_size, intervals, random):
         splice_points = sorted(
             set(
                 [0]
-                + [random.randint(1, len(value) - 1) for _ in range(num_splice)] if len(value) > 1 else []
+                + (
+                    [random.randint(1, len(value) - 1) for _ in range(num_splice)]
+                    if len(value) > 1
+                    else []
+                )
                 + [len(value)]
             )
         )
