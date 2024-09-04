@@ -26,8 +26,8 @@ def fuzz(f, *, start, mode, max_examples):
     fuzz_one_input(start)
     for _ in range(max_examples):
         if mode == "atheris":
-            # avoid our blackbox for num_calls < 100
-            mutated = custom_mutator(start, random=r, num_calls=100)
+            # disable our blackbox for tests
+            mutated = custom_mutator(start, random=r, blackbox=False)
         if mode == "baseline":
             mutated = r.randbytes(BUFFER_SIZE)
         fuzz_one_input(mutated)

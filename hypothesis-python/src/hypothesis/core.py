@@ -1603,6 +1603,7 @@ def mutate_float(
         and not math.isnan(value)
         and random.randint(0, 10) == 0
     ):
+
         def random_value(min_point, max_point):
             return random_float_between(
                 min_point, max_point, smallest_nonzero_magnitude, random=random
@@ -1860,10 +1861,10 @@ def mutate_bytes(value, *, min_size, max_size, random):
 
 
 def _custom_mutator(data, buffer_size, seed):
-    return custom_mutator(data, random=Random(seed), num_calls=statistics["num_calls"])
+    return custom_mutator(data, random=Random(seed), blackbox=True)
 
 
-def custom_mutator(data, *, random, num_calls):
+def custom_mutator(data, *, random, blackbox):
     t_start = time.time()
     statistics["num_calls"] += 1
     # custom_mutator should be called by atheris exactly once per test case.
@@ -1880,9 +1881,9 @@ def custom_mutator(data, *, random, num_calls):
         # returning randbytes(BUFFER_SIZE) probably has performance implications.
         return random.randbytes(BUFFER_SIZE)
 
-    # blackbox exploratory/warmup phase for the first 100 inputs
+    # blackbox exploratory/warmup phase for the first 5k inputs / 5 seconds
     # TODO we probably want an adaptive tradeoff here, "blackbox until n consecutive uninteresting inputs"
-    if num_calls < 100:
+    if blackbox and (statistics["num_calls"] < 5000 or statistics["time_mutating"] < 5):
         return _fresh()
 
     try:
