@@ -1,12 +1,14 @@
 from hypothesis import settings, given, assume, example
 from hypothesis import strategies as st
-from tests.conjecture.common import run_to_buffer
 from hypothesis.core import custom_mutator, BUFFER_SIZE
 import random
 from random import Random
 import pytest
+from hypothesis.internal.intervalsets import IntervalSet
 import uuid
+import math
 
+from tests.conjecture.common import run_to_buffer
 from tests.common.utils import flaky
 
 MARKER = uuid.uuid4().hex
@@ -65,7 +67,6 @@ def test_can_find_endpoints(min_value, max_value):
 )
 @flaky(max_runs=5, min_passes=1)
 def test_can_find_nearby_integers(target, offset, min_offset, max_offset):
-
     min_value = None if min_offset is None else target - min_offset
     max_value = None if max_offset is None else target + max_offset
 
@@ -87,3 +88,40 @@ def test_can_find_nearby_integers(target, offset, min_offset, max_offset):
         fuzz(f, start=start, mode="atheris", max_examples=2_000)
 
     fuzz(f, start=start, mode="baseline", max_examples=2_000)
+
+
+@pytest.mark.parametrize(
+    "target",
+    # copying another interval
+    ["xXaaxX", "bbxXxX", "axXaxX", "bbaaaa"] +
+    # copying two intervals (TODO this is very flaky)
+    # ["xXxXxX"] +
+    # deleting an interval
+    ["bbaax", "bbaa", "bba", "bb", "b", "", "bbX", "axX"],
+    # TODO tests for inserting a new string / replacing an interval with a new string
+)
+@flaky(max_runs=3, min_passes=1)
+def test_can_splice_strings(target):
+    @settings(database=None)
+    @given(st.text())
+    def f(s):
+        assert s != target
+
+    @run_to_buffer
+    def start(data):
+        data.draw_string(
+            intervals=IntervalSet(((0, 55295), (57344, 1114111))),
+            min_size=0,
+            max_size=math.inf,
+            forced="bbaaxX",
+        )
+        data.mark_interesting()
+
+    # atheris should find this and baseline shouldn't.
+    with pytest.raises(AssertionError):
+        fuzz(f, start=start, mode="atheris", max_examples=5_000)
+
+    # hypothesis does a good job of finding small strings in the ascii range.
+    if len(target) > 1:
+        fuzz(f, start=start, mode="baseline", max_examples=5_000)
+
