@@ -7,6 +7,7 @@ import pytest
 from hypothesis.internal.intervalsets import IntervalSet
 import uuid
 import math
+from hypothesis.internal.reflection import get_pretty_function_description
 
 from tests.conjecture.common import run_to_buffer
 from tests.common.utils import flaky
@@ -66,8 +67,9 @@ def fuzz(f, *, start, mode, max_examples):
         st.lists(st.floats()),
         st.lists(st.booleans()),
         st.lists(st.text()),
-        st.lists(st.binary())
+        st.lists(st.binary()),
     ],
+    ids=get_pretty_function_description,
 )
 @given(start=st.binary())
 @settings(deadline=None, max_examples=5)
