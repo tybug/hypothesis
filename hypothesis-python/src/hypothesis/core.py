@@ -1476,6 +1476,130 @@ def _make_serializable(ir_value):
     return ir_value
 
 
+def mutate_integer(value, *, min_value, max_value, random):
+    # roughly equivalent to shrink_towards in draw_integer, but without
+    # shrinking semantics.
+    origin = 0
+    if min_value is not None:
+        origin = max(min_value, origin)
+    if max_value is not None:
+        origin = min(max_value, origin)
+
+    def _unbounded_integer():
+        # bias towards smaller values. distribution copied from draw_integer
+        bits = random.choices(INT_SIZES, INT_SIZES_WEIGHTS, k=1)[0]
+        radius = 2 ** (bits - 1) - 1
+        return random.randint(-radius, radius)
+
+    if min_value is None and max_value is None:
+        forced = _unbounded_integer()
+    elif min_value is None:
+        assert max_value is not None
+        forced = max_value + 1
+        while forced > max_value:
+            forced = origin + _unbounded_integer()
+    elif max_value is None:
+        assert min_value is not None
+        forced = min_value - 1
+        while forced < min_value:
+            forced = origin + _unbounded_integer()
+    else:
+        assert min_value is not None
+        assert max_value is not None
+        # somewhat hodgepodge amalgamation of what hypothesis does for
+        # weighting the size of bounded ints, and what I think works
+        # better for fuzzing (e.g. lowering the bit limit, decreasing the
+        # probability from 7/8 to 1/2).
+        bits = (max_value - min_value).bit_length()
+        if bits > 18 and random.randint(0, 1) == 0:
+            bits = min(bits, random.choices(INT_SIZES, INT_SIZES_WEIGHTS, k=1)[0])
+            radius = 2 ** (bits - 1) - 1
+            forced = origin + random.randint(-radius, radius)
+            forced = clamp(min_value, forced, max_value)
+        else:
+            forced = random.randint(min_value, max_value)
+    return forced
+
+
+def mutate_float(
+    value, *, min_value, max_value, allow_nan, smallest_nonzero_magnitude, random
+):
+    def is_inf(value, *, sign):
+        return math.copysign(1.0, value) == sign and math.isinf(value)
+
+    def permitted(f):
+        if math.isnan(f):
+            return allow_nan
+        if 0 < abs(f) < smallest_nonzero_magnitude:
+            return False
+        return sign_aware_lte(min_value, f) and sign_aware_lte(f, max_value)
+
+    # draw a "nasty" value with probability 0.05. I think hypothesis uses 0.2,
+    # but they have a significantly smaller budget and also count duplicates,
+    # so we should have a lower p.
+    boundary_values = [
+        min_value,
+        next_up(min_value),
+        min_value + 1,
+        max_value - 1,
+        next_down(max_value),
+        max_value,
+    ]
+    nasty_floats = [f for f in NASTY_FLOATS + boundary_values if permitted(f)]
+    if random.randint(0, 99) < 5 and nasty_floats:
+        forced = random.choice(nasty_floats)
+    else:
+        min_val = min_value
+        max_val = max_value
+        # we already generating inf via nasty_floats. constrain to real
+        # floats here.
+        if is_inf(min_value, sign=-1.0):
+            min_val = next_up(min_value)
+        if is_inf(min_value, sign=1.0):
+            min_val = next_down(min_value)
+        if is_inf(max_value, sign=-1.0):
+            max_val = next_up(max_value)
+        if is_inf(max_value, sign=1.0):
+            max_val = next_down(max_value)
+
+        assert not math.isinf(min_val)
+        assert not math.isinf(max_val)
+        assert sign_aware_lte(min_val, max_val)
+
+        origin = 0
+        if min_value is not None:
+            origin = max(min_value, origin)
+        if max_value is not None:
+            origin = min(max_value, origin)
+
+        # weight towards smaller floats - like we do for ints, but even
+        # more heavily, as the range can be enormous.
+        diff = max_val - min_val
+        # max - min can overflow to inf at the float boundary.
+        bits = int(diff).bit_length() if not math.isinf(diff) else 1024
+        if bits > 18 and random.randint(0, 7) < 7:
+            bits = min(bits, random.choices(FLOAT_SIZES, FLOAT_SIZES_WEIGHTS, k=1)[0])
+            radius = float(2 ** (bits - 1) - 1)
+            forced = origin + random_float_between(
+                -radius, radius, smallest_nonzero_magnitude, random=random
+            )
+            forced = clamp(min_value, forced, max_value)
+        else:
+            forced = random_float_between(
+                min_val, max_val, smallest_nonzero_magnitude, random=random
+            )
+    # with probability 0.05, truncate to an integer-valued float
+    if (
+        random.randint(0, 99) < 5
+        and not math.isnan(forced)
+        and not math.isinf(forced)
+        and permitted(truncated := float(math.floor(forced)))
+    ):
+        forced = truncated
+
+    return forced
+
+
 def mutate_string(value, *, min_size, max_size, intervals, random):
     if max_size is None:
         max_size = DRAW_STRING_DEFAULT_MAX_SIZE
@@ -1502,7 +1626,7 @@ def mutate_string(value, *, min_size, max_size, intervals, random):
         return "".join(_char() for _ in range(size))
 
     # totally random with probability 0.1, more intelligent mutation
-    # othewise
+    # otherwise
     if random.randint(0, 9) == 0:
         # copied from HypothesisProvider.draw_string
         average_size = min(
@@ -1693,51 +1817,12 @@ def custom_mutator(data, buffer_size, seed):
                     _make_serializable(v) for v in splice_choices
                 ]
         elif ir_type == "integer":
-            min_value = kwargs["min_value"]
-            max_value = kwargs["max_value"]
-            # roughly equivalent to shrink_towards in draw_integer, but without
-            # shrinking semantics.
-            origin = 0
-            if min_value is not None:
-                origin = max(min_value, origin)
-            if max_value is not None:
-                origin = min(max_value, origin)
-
-            def _unbounded_integer():
-                # bias towards smaller values. distribution copied from draw_integer
-                bits = random.choices(INT_SIZES, INT_SIZES_WEIGHTS, k=1)[0]
-                radius = 2 ** (bits - 1) - 1
-                return random.randint(-radius, radius)
-
-            if min_value is None and max_value is None:
-                forced = _unbounded_integer()
-            elif min_value is None:
-                assert max_value is not None
-                forced = max_value + 1
-                while forced > max_value:
-                    forced = origin + _unbounded_integer()
-            elif max_value is None:
-                assert min_value is not None
-                forced = min_value - 1
-                while forced < min_value:
-                    forced = origin + _unbounded_integer()
-            else:
-                assert min_value is not None
-                assert max_value is not None
-                # somewhat hodgepodge amalgamation of what hypothesis does for
-                # weighting the size of bounded ints, and what I think works
-                # better for fuzzing (e.g. lowering the bit limit, decreasing the
-                # probability from 7/8 to 1/2).
-                bits = (max_value - min_value).bit_length()
-                if bits > 18 and random.randint(0, 1) == 0:
-                    bits = min(
-                        bits, random.choices(INT_SIZES, INT_SIZES_WEIGHTS, k=1)[0]
-                    )
-                    radius = 2 ** (bits - 1) - 1
-                    forced = origin + random.randint(-radius, radius)
-                    forced = clamp(min_value, forced, max_value)
-                else:
-                    forced = random.randint(min_value, max_value)
+            forced = mutate_integer(
+                value,
+                min_value=kwargs["min_value"],
+                max_value=kwargs["max_value"],
+                random=random,
+            )
         elif ir_type == "boolean":
             p = kwargs["p"]
             assert 0 < p < 1
@@ -1754,85 +1839,14 @@ def custom_mutator(data, buffer_size, seed):
                 random=random,
             )
         elif ir_type == "float":
-            min_value = kwargs["min_value"]
-            max_value = kwargs["max_value"]
-            allow_nan = kwargs["allow_nan"]
-            smallest_nonzero_mag = kwargs["smallest_nonzero_magnitude"]
-
-            def is_inf(value, *, sign):
-                return math.copysign(1.0, value) == sign and math.isinf(value)
-
-            def permitted(f):
-                if math.isnan(f):
-                    return allow_nan
-                if 0 < abs(f) < smallest_nonzero_mag:
-                    return False
-                return sign_aware_lte(min_value, f) and sign_aware_lte(f, max_value)
-
-            # draw a "nasty" value with probability 0.05. I think hypothesis uses 0.2,
-            # but they have a significantly smaller budget and also count duplicates,
-            # so we should have a lower p.
-            boundary_values = [
-                min_value,
-                next_up(min_value),
-                min_value + 1,
-                max_value - 1,
-                next_down(max_value),
-                max_value,
-            ]
-            nasty_floats = [f for f in NASTY_FLOATS + boundary_values if permitted(f)]
-            if random.randint(0, 99) < 5 and nasty_floats:
-                forced = random.choice(nasty_floats)
-            else:
-                min_val = min_value
-                max_val = max_value
-                # we already generating inf via nasty_floats. constrain to real
-                # floats here.
-                if is_inf(min_value, sign=-1.0):
-                    min_val = next_up(min_value)
-                if is_inf(min_value, sign=1.0):
-                    min_val = next_down(min_value)
-                if is_inf(max_value, sign=-1.0):
-                    max_val = next_up(max_value)
-                if is_inf(max_value, sign=1.0):
-                    max_val = next_down(max_value)
-
-                assert not math.isinf(min_val)
-                assert not math.isinf(max_val)
-                assert sign_aware_lte(min_val, max_val)
-
-                origin = 0
-                if min_value is not None:
-                    origin = max(min_value, origin)
-                if max_value is not None:
-                    origin = min(max_value, origin)
-
-                # weight towards smaller floats - like we do for ints, but even
-                # more heavily, as the range can be enormous.
-                diff = max_val - min_val
-                # max - min can overflow to inf at the float boundary.
-                bits = int(diff).bit_length() if not math.isinf(diff) else 1024
-                if bits > 18 and random.randint(0, 7) < 7:
-                    bits = min(
-                        bits, random.choices(FLOAT_SIZES, FLOAT_SIZES_WEIGHTS, k=1)[0]
-                    )
-                    radius = float(2 ** (bits - 1) - 1)
-                    forced = origin + random_float_between(
-                        -radius, radius, smallest_nonzero_mag, random=random
-                    )
-                    forced = clamp(min_value, forced, max_value)
-                else:
-                    forced = random_float_between(
-                        min_val, max_val, smallest_nonzero_mag, random=random
-                    )
-            # with probability 0.05, truncate to an integer-valued float
-            if (
-                random.randint(0, 99) < 5
-                and not math.isnan(forced)
-                and not math.isinf(forced)
-                and permitted(truncated := float(math.floor(forced)))
-            ):
-                forced = truncated
+            forced = mutate_float(
+                value,
+                min_value=kwargs["min_value"],
+                max_value=kwargs["max_value"],
+                allow_nan=kwargs["allow_nan"],
+                smallest_nonzero_magnitude=kwargs["smallest_nonzero_magnitude"],
+                random=random,
+            )
         else:
             raise Exception(f"unhandled case ({ir_type=})")
 
