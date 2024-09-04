@@ -1944,7 +1944,8 @@ def custom_mutator(data, *, random, num_calls):
         replacements.append((start, end, replacement))
 
     replacements = sorted(replacements, key=lambda v: v[0])
-    offset = max(bounds.keys(), key=lambda v: v[1])[1]
+    # some strategies have empty choice sequences with no bounds (st.just(None)).
+    offset = max(bounds.keys(), key=lambda v: v[1])[1] if bounds else 0
     for u, v, r in replacements:
         offset += len(r) - (v - u)
     data = bytearray(replace_all(data, replacements))
