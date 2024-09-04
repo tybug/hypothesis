@@ -29,6 +29,55 @@ def fuzz(f, *, start, mode, max_examples):
         fuzz_one_input(mutated)
 
 
+@pytest.mark.parametrize(
+    "strategy",
+    [
+        # string
+        st.text(),
+        st.text(min_size=0, max_size=0),
+        st.text(min_size=10),
+        st.text(min_size=10, max_size=15),
+        # integer
+        st.integers(),
+        st.integers(-100),
+        st.integers(100),
+        st.integers(0, 0),
+        st.integers(0, 5),
+        st.integers(-5, 0),
+        st.integers(-(2**64), 2**32),
+        # bytes
+        st.binary(),
+        st.binary(min_size=0, max_size=0),
+        st.binary(min_size=10),
+        st.binary(min_size=5, max_size=10),
+        # float
+        st.floats(),
+        st.floats(min_value=-10),
+        st.floats(max_value=10),
+        st.floats(-10, 10),
+        st.floats(allow_nan=False),
+        st.floats(allow_infinity=False),
+        # bool
+        st.booleans(),
+        # composite / weird / other
+        st.just(None),
+        st.lists(st.integers()),
+        st.lists(st.floats()),
+        st.lists(st.booleans()),
+        st.lists(st.text()),
+        st.lists(st.binary())
+    ],
+)
+@given(start=st.binary())
+@settings(deadline=None, max_examples=5)
+def test_runs_with_various_kwargs(start, strategy):
+    @given(strategy)
+    def f(x):
+        pass
+
+    fuzz(f, start=start, mode="atheris", max_examples=100)
+
+
 @example(-198237154, 1928391283)
 @example(50_000, 100_000)
 @given(st.integers(), st.integers())
@@ -98,7 +147,7 @@ def test_can_find_nearby_integers(target, offset, min_offset, max_offset):
     # ["xXxXxX"] +
     # deleting an interval
     ["bbaax", "bbaa", "bba", "bb", "b", "", "bbX", "axX"],
-    # TODO tests for inserting a new string / replacing an interval with a new string
+    # TODO tests for inserting a new value / replacing an interval with a new value
 )
 @flaky(max_runs=3, min_passes=1)
 def test_can_splice_strings(target):
@@ -117,7 +166,6 @@ def test_can_splice_strings(target):
         )
         data.mark_interesting()
 
-    # atheris should find this and baseline shouldn't.
     with pytest.raises(AssertionError):
         fuzz(f, start=start, mode="atheris", max_examples=10_000)
 
