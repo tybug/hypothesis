@@ -91,6 +91,12 @@ class Optimiser:
         blocks_examined = set()
 
         prev = None
+        d = self.current_data
+        print(
+            "blocks",
+            [d.buffer[block.start : block.end] for block in self.current_data.blocks],
+        )
+        print([n.value for n in d.examples.ir_tree_nodes])
         i = len(self.current_data.blocks) - 1
         while i >= 0 and self.improvements <= self.max_improvements:
             if prev is not self.current_data:
@@ -105,6 +111,7 @@ class Optimiser:
             data = self.current_data
             block = data.blocks[i]
             prefix = data.buffer[: block.start]
+            print(f"examining block {i} {data.buffer[block.start:block.end]}")
 
             existing = data.buffer[block.start : block.end]
             existing_as_int = int_from_bytes(existing)
@@ -145,6 +152,7 @@ class Optimiser:
                     if len(attempt.buffer) == len(self.current_data.buffer):
                         return False
 
+                    return False
                     for i, ex in enumerate(self.current_data.examples):
                         if ex.start >= block.end:
                             break  # pragma: no cover

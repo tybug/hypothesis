@@ -54,6 +54,7 @@ from hypothesis.internal.conjecture.utils import (
     INT_SIZES_SAMPLER,
     Sampler,
     calc_label_from_name,
+    identity,
     many,
 )
 from hypothesis.internal.floats import (
@@ -994,17 +995,11 @@ class IRNode:
         if self.was_forced:
             return True
 
-        if self.ir_type == "integer":
-            shrink_towards = self.kwargs["shrink_towards"]
-            min_value = self.kwargs["min_value"]
-            max_value = self.kwargs["max_value"]
+        from hypothesis.internal.conjecture.datatree import supported, ir_ordering
 
-            if min_value is not None:
-                shrink_towards = max(min_value, shrink_towards)
-            if max_value is not None:
-                shrink_towards = min(max_value, shrink_towards)
+        if self.ir_type in supported:
+            return ir_ordering(self.ir_type, self.kwargs, self.value, to="index") == 0
 
-            return self.value == shrink_towards
         if self.ir_type == "float":
             min_value = self.kwargs["min_value"]
             max_value = self.kwargs["max_value"]
@@ -1029,15 +1024,6 @@ class IRNode:
             # It would be good to compute this correctly in the future, but it's
             # also not incorrect to be conservative here.
             return False
-        if self.ir_type == "boolean":
-            return self.value is False
-        if self.ir_type == "string":
-            # smallest size and contains only the smallest-in-shrink-order character.
-            minimal_char = self.kwargs["intervals"].char_in_shrink_order(0)
-            return self.value == (minimal_char * self.kwargs["min_size"])
-        if self.ir_type == "bytes":
-            # smallest size and all-zero value.
-            return len(self.value) == self.kwargs["min_size"] and not any(self.value)
 
         raise NotImplementedError(f"unhandled ir_type {self.ir_type}")
 
@@ -1139,6 +1125,231 @@ def ir_value_equal(ir_type, v1, v2):
 
 def ir_kwargs_equal(ir_type, kwargs1, kwargs2):
     return ir_kwargs_key(ir_type, kwargs1) == ir_kwargs_key(ir_type, kwargs2)
+
+
+def ir_ordering_collection(
+    v, *, min_size, alphabet_size, to_order=identity, from_order=identity, to
+):
+    def size_to_index(size):
+        # this is the closed form of this geometric series:
+        # for i in range(size):
+        #     index += alphabet_size**i
+        if alphabet_size <= 0:
+            assert size == 0
+            return 0
+        if alphabet_size == 1:
+            return size
+        return (alphabet_size**size - 1) // (alphabet_size - 1)
+
+    def index_to_size(index):
+        if alphabet_size == 0:
+            return 0
+        elif alphabet_size == 1:
+            # there is only one string of each size, so the size is equal to its
+            # ordering.
+            return v
+
+        # the closed-form inverse of the geometric sum is
+        #   size = math.floor(math.log(v * (alphabet_size - 1) + 1, alphabet_size))
+        # but this suffers from float precision errors. Reimplement a
+        # (moderately slower) integer-only logarithm to avoid this.
+        target = index * (alphabet_size - 1) + 1
+        size = 0
+        while target >= alphabet_size:
+            target //= alphabet_size
+            size += 1
+        return size
+
+    if to == "index":
+        index = size_to_index(len(v)) - size_to_index(min_size)
+        # encode characters starting from the end (so ab is simpler than ba).
+        # this computes for each char c, at position i counting from the end,
+        # the number of strings of size i before it in the ordering.
+        for i, c in enumerate(reversed(v)):
+            index += (alphabet_size**i) * to_order(c)
+        return index
+    else:
+        v += size_to_index(min_size)
+        size = index_to_size(v)
+        # subtract out the amount responsible for the size
+        v -= size_to_index(size)
+        vals = []
+        for i in reversed(range(size)):
+            n = v // (alphabet_size**i)
+            # subtract out the nearest multiple of alphabet_size**i
+            v -= n * (alphabet_size**i)
+            vals.append(from_order(n))
+        return vals
+
+
+def ir_ordering(ir_type, kwargs, v, *, to):
+    # this is an invertible function; we can convert ir values to an index in
+    # their ordering, and indices in an ordering to the corresponding ir value.
+    # (therefore an invariant on this function is it must be injective both ways.)
+    #
+    # Note that "ordering" is kwargs-dependent; 0 is simplest for
+    # {"min_value": None, "max_value": None} but not {"min_value": 1, "max_value": None}.
+    assert to in {"index", "value"}
+    if to == "value":
+        assert v >= 0
+
+    if ir_type == "integer":
+        # Let a = shrink_towards.
+        # * Unbounded: Ordered by (|a - x|, sgn(a - x)). Think of a zigzag.
+        #   [a, a + 1, a - 1, a + 2, a - 2, ...]
+        # * Semi-bounded: Same as unbounded except stop on one side when you hit
+        #   {min, max}_value. so min_value=-1 a=0 has order
+        #   [0, 1, -1, 2, 3, 4, ...]
+        # * Bounded: Ordered by (sgn(a - x), |a - x|). Count upwards until max_value,
+        #   then count downards.
+        #   [a, a + 1, a + 2, ..., max_value, a - 1, a - 2, ..., min_value]
+        #
+        # To simplify and gain intuition about this ordering, you can think about
+        # the most common case where 0 is first (a = 0). We deviate from this only
+        # rarely, e.g. for datetimes, where we generally want year 2000 to be
+        # simpler than year 0.
+
+        shrink_towards = kwargs["shrink_towards"]
+        min_value = kwargs["min_value"]
+        max_value = kwargs["max_value"]
+
+        if min_value is not None:
+            shrink_towards = max(min_value, shrink_towards)
+        if max_value is not None:
+            shrink_towards = min(max_value, shrink_towards)
+
+        def zigzag(v, *, to=to):
+            # index | 0  1  2  3  4  5  6  7
+            #     v | 0  1 -1  2 -2  3 -3  4
+            if to == "index":
+                n = 2 * abs(shrink_towards - v)
+                if v > shrink_towards:
+                    n -= 1
+                return n
+            else:
+                assert v >= 0
+                # count how many "steps" away from shrink_towards we are.
+                n = (v + 1) // 2
+                # now check if we're stepping up or down from shrink_towards.
+                if (v % 2) == 0:
+                    n *= -1
+                return shrink_towards + n
+
+        if min_value is None and max_value is None:
+            # case: unbounded
+            return zigzag(v)
+        elif min_value is not None and max_value is None:
+            # case: semibounded below
+
+            # min_value = -2
+            # index | 0  1  2  3  4  5  6  7
+            #     v | 0  1 -1  2 -2  3  4  5
+            if to == "index":
+                if abs(v - shrink_towards) <= (shrink_towards - min_value):
+                    return zigzag(v)
+                return v - min_value
+            else:
+                if v <= zigzag(min_value, to="index"):
+                    return zigzag(v)
+                return v + min_value
+
+        elif max_value is not None and min_value is None:
+            # case: semibounded above
+            if to == "index":
+                if abs(v - shrink_towards) <= (max_value - shrink_towards):
+                    return zigzag(v)
+                return max_value - v
+            else:
+                if v <= zigzag(max_value, to="index"):
+                    return zigzag(v)
+                return max_value - v
+        else:
+            # case: bounded
+
+            # range = [-2, 5]
+            # shrink_towards = 2
+            # index |  0  1  2  3  4  5  6  7
+            #     v |  2  3  4  5  1  0 -1 -2
+            #
+            # ^ with zero weights at index = [0, 2, 6]
+            # index |  0  1  2  3  4
+            #     v |  3  5  1  0 -2
+            assert kwargs["weights"] is None, "possible but really annoying to support."
+            if to == "index":
+                if v >= shrink_towards:
+                    return v - shrink_towards
+                return max_value - shrink_towards + abs(v - shrink_towards)
+            else:
+                if v <= max_value - shrink_towards:
+                    return shrink_towards + v
+                return shrink_towards - (v - (max_value - shrink_towards))
+    elif ir_type == "boolean":
+        # Ordered by [False, True].
+        p = kwargs["p"]
+        only = None
+        if p <= 2 ** (-64):
+            only = "false"
+        elif p >= (1 - 2 ** (-64)):
+            only = "true"
+
+        if to == "index":
+            if only is not None:
+                # only one option is possible, so whatever it is is first.
+                return 0
+            return int(v)
+        else:
+            assert v in {0, 1}
+            if only is not None:
+                # only one choice
+                assert v == 0
+                return bool(only == "true")
+            else:
+                return bool(v)
+    elif ir_type == "bytes":
+        v = ir_ordering_collection(
+            list(v) if to == "index" else v,
+            min_size=kwargs["min_size"],
+            alphabet_size=2**8,
+            to=to,
+        )
+        return bytes(v) if to == "value" else v
+    elif ir_type == "string":
+        intervals = kwargs["intervals"]
+        v = ir_ordering_collection(
+            v,
+            min_size=kwargs["min_size"],
+            alphabet_size=len(intervals),
+            to_order=intervals.index_from_char_in_shrink_order,
+            from_order=intervals.char_in_shrink_order,
+            to=to,
+        )
+        return "".join(v) if to == "value" else v
+
+
+# for s in [
+#     "a",
+#     "b",
+#     "c",
+#     "d",
+#     "aa",
+#     "ab",
+#     "ac",
+#     "ad",
+#     "ba",
+#     "bb",
+#     "bc",
+#     "ca",
+#     "cb",
+#     "cc",
+#     "aaa",
+#     "aaaa",
+# ]:
+#     print(f"----------------------- processing {s} -----------------------")
+#     kwargs = {"intervals": IntervalSet.from_string("abcd"), "min_size": 1}
+#     idx = ir_ordering("string", kwargs=kwargs, v=s, to="index")
+#     print(f"{idx=}")
+#     v = ir_ordering("string", kwargs=kwargs, v=idx, to="value")
+#     print(f"{s} -> {idx} -> {v}")
 
 
 @dataclass_transform()
@@ -1483,7 +1694,7 @@ class HypothesisProvider(PrimitiveProvider):
                 if forced >= shrink_towards:
                     forced_idx = forced - shrink_towards
                 else:
-                    forced_idx = shrink_towards + gap - forced
+                    forced_idx = max_value - forced
             idx = sampler.sample(self._cd, forced=forced_idx, fake_forced=fake_forced)
 
             # For range -2..2, interpret idx = 0..4 as [0, 1, 2, -1, -2]
@@ -2594,6 +2805,8 @@ class ConjectureData:
 
     @property
     def examples(self) -> Examples:
+        return Examples(record=self.__example_record, blocks=self.blocks)
+
         assert self.frozen
         if self.__examples is None:
             self.__examples = Examples(record=self.__example_record, blocks=self.blocks)

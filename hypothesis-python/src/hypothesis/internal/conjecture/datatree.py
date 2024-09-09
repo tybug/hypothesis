@@ -8,7 +8,6 @@
 # v. 2.0. If a copy of the MPL was not distributed with this file, You can
 # obtain one at https://mozilla.org/MPL/2.0/.
 
-import itertools
 import math
 from typing import List, Optional, Union
 
@@ -21,7 +20,6 @@ from hypothesis.errors import (
     StopTest,
 )
 from hypothesis.internal import floats as flt
-from hypothesis.internal.compat import int_to_bytes
 from hypothesis.internal.conjecture.data import (
     BooleanKWargs,
     BytesKWargs,
@@ -34,6 +32,7 @@ from hypothesis.internal.conjecture.data import (
     IRTypeName,
     Status,
     StringKWargs,
+    ir_ordering,
 )
 from hypothesis.internal.escalation import InterestingOrigin
 from hypothesis.internal.floats import (
@@ -263,61 +262,15 @@ def compute_max_children(ir_type, kwargs):
 # reasons. If you just need the number of children, it is cheaper to use
 # compute_max_children than to reify the list of children (only to immediately
 # throw it away).
+supported = {"integer", "boolean", "bytes", "string"}
+
+
 def all_children(ir_type, kwargs):
-    if ir_type == "integer":
-        min_value = kwargs["min_value"]
-        max_value = kwargs["max_value"]
-        weights = kwargs["weights"]
+    if ir_type in supported:
+        for index in range(compute_max_children(ir_type, kwargs)):
+            yield ir_ordering(ir_type, kwargs, index, to="value")
+        return
 
-        if min_value is None and max_value is None:
-            # full 128 bit range.
-            yield from range(-(2**127) + 1, 2**127 - 1)
-
-        elif min_value is not None and max_value is not None:
-            if weights is None:
-                yield from range(min_value, max_value + 1)
-            else:
-                # skip any values with a corresponding weight of 0 (can never be drawn).
-                for weight, n in zip(weights, range(min_value, max_value + 1)):
-                    if weight == 0:
-                        continue
-                    yield n
-        else:
-            assert (min_value is None) ^ (max_value is None)
-            # hard case: only one bound was specified. Here we probe in 128 bits
-            # around shrink_towards, and discard those above max_value or below
-            # min_value respectively.
-            shrink_towards = kwargs["shrink_towards"]
-            if min_value is None:
-                shrink_towards = min(max_value, shrink_towards)
-                yield from range(shrink_towards - (2**127) + 1, max_value)
-            else:
-                assert max_value is None
-                shrink_towards = max(min_value, shrink_towards)
-                yield from range(min_value, shrink_towards + (2**127) - 1)
-
-    if ir_type == "boolean":
-        p = kwargs["p"]
-        if p <= 2 ** (-64):
-            yield False
-        elif p >= (1 - 2 ** (-64)):
-            yield True
-        else:
-            yield from [False, True]
-    if ir_type == "bytes":
-        for size in range(kwargs["min_size"], kwargs["max_size"] + 1):
-            yield from (int_to_bytes(i, size) for i in range(2 ** (8 * size)))
-    if ir_type == "string":
-        min_size = kwargs["min_size"]
-        max_size = kwargs["max_size"]
-        intervals = kwargs["intervals"]
-
-        # written unidiomatically in order to handle the case of max_size=inf.
-        size = min_size
-        while size <= max_size:
-            for ords in itertools.product(intervals, repeat=size):
-                yield "".join(chr(n) for n in ords)
-            size += 1
     if ir_type == "float":
 
         def floats_between(a, b):
