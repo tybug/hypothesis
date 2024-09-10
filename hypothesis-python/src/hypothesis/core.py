@@ -1821,17 +1821,52 @@ def mutate_collection(value, *, min_size, max_size, draw_element, random):
     return forced
 
 
+# upweight certain ascii chars. copied from libfuzzer with some
+# modifications (e.g. drop 0 and 255).
+# https://github.com/llvm/llvm-project/blob/0f56ba13bff7ab72bfafcf7c5cf
+# 9e5b8bd16d895/compiler-rt/lib/fuzzer/FuzzerMutate.cpp#L66C1-L67C1
+#    const char Special[] = "!*'();:@&=+$,/?%#[]012Az-`~.\xff\x00";
+upweighted_ascii = [ord(x) for x in "!*'();:@&=+$,/?%#[]012Az-`~."]
+
+
 def mutate_string(value, *, min_size, max_size, intervals, random):
+    # 50% of the time, use pure ascii. 20% of the time use pure random (which may
+    # coincidentally generate ascii). the other 30%, mix our ascii upweighting
+    # scheme with unicode, where ascii is upweighted 80%.
+    #
+    # atheris does one more thing we don't, which is a 25% chance of a
+    # utf-16 compatible string. I just think it's low-impact and haven't bothered
+    # yet.
+    # https://github.com/google/atheris/blob/cbf4ad989dcb4d3ef42152990ed89cfceb
+    # 50e059/src/native/fuzzed_data_provider.cc#L61
+    r = random.random()
+    generation_kind = "ascii" if r < 0.5 else "random" if r < 0.7 else "mixed"
+    upweighted_choices = [n for n in upweighted_ascii if n < intervals.size]
+
+    def ascii():
+        # upweight special ascii chars with 40% probability. libfuzzer does 50%
+        # but this just seems too high.
+        if upweighted_choices and random.random() < 0.4:
+            return random.choice(upweighted_choices)
+        # this is actually the first 256 characters, not strictly ascii (first 128).
+        # matches hypothesis and I think libfuzzer.
+        return random.randint(0, min(intervals.size - 1, 255))
+
+    def random_char():
+        return random.randint(0, intervals.size - 1)
+
     def draw_element():
-        # bias towards first 256 characters, which is ascii range for the
-        # default st.text()
-        if intervals.size > 256:
-            if random.random() < 0.2:
-                n = random.randint(256, intervals.size - 1)
+        if generation_kind == "ascii":
+            n = ascii()
+        elif generation_kind == "random":
+            n = random_char()
+        elif generation_kind == "mixed":
+            if random.random() < 0.8:
+                n = ascii()
             else:
-                n = random.randint(0, 255)
+                n = random_char()
         else:
-            n = random.randint(0, intervals.size - 1)
+            assert False
         return chr(intervals[n])
 
     return "".join(

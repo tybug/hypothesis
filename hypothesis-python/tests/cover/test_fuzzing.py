@@ -1,17 +1,30 @@
-from hypothesis import settings, given, assume, example
-from hypothesis import strategies as st
-from hypothesis.core import custom_mutator, BUFFER_SIZE
-import random
-from random import Random
-import pytest
-from hypothesis.internal.intervalsets import IntervalSet
-import uuid
-import math
-from hypothesis.internal.reflection import get_pretty_function_description
-from hypothesis.internal.floats import SMALLEST_SUBNORMAL, next_up, next_down
+# This file is part of Hypothesis, which may be found at
+# https://github.com/HypothesisWorks/hypothesis/
+#
+# Copyright the Hypothesis Authors.
+# Individual contributors are listed in AUTHORS.rst and the git log.
+#
+# This Source Code Form is subject to the terms of the Mozilla Public License,
+# v. 2.0. If a copy of the MPL was not distributed with this file, You can
+# obtain one at https://mozilla.org/MPL/2.0/.
 
-from tests.conjecture.common import run_to_buffer
+import math
+import random
+import string
+import uuid
+from random import Random
+
+import pytest
+
+from hypothesis import assume, example, given, settings, strategies as st
+from hypothesis.core import BUFFER_SIZE, custom_mutator, mutate_string
+from hypothesis.internal.floats import SMALLEST_SUBNORMAL, next_down, next_up
+from hypothesis.internal.intervalsets import IntervalSet
+from hypothesis.internal.reflection import get_pretty_function_description
+
 from tests.common.utils import flaky
+from tests.conjecture.common import run_to_buffer
+from tests.common.strategies import intervals
 
 MARKER = uuid.uuid4().hex
 
@@ -254,3 +267,26 @@ def test_can_splice_bytes(target):
 
     if len(target) > 1:
         fuzz(f, start=start, mode="baseline", max_examples=10_000)
+
+@example(IntervalSet.from_string("abcdefg"))
+@example(IntervalSet.from_string(string.printable))
+@example(IntervalSet.from_string(string.ascii_lowercase))
+@example(IntervalSet.from_string(string.hexdigits))
+@example(IntervalSet.from_string(string.printable + chr(1000)))
+@example(IntervalSet(((0, 254),)))
+@example(IntervalSet(((0, 255),)))
+@example(IntervalSet(((0, 256),)))
+@example(IntervalSet(((0, 257),)))
+@example(IntervalSet(((1000, 1000),)))
+@example(IntervalSet(((0, 20), (40, 60))))
+@given(intervals=intervals(min_size=1))
+def test_mutate_string_on_weird_intervals(intervals):
+    # please dont crash on weird bounds
+    for _ in range(100):
+        mutate_string(
+            ".........",
+            min_size=0,
+            max_size=100,
+            intervals=intervals,
+            random=r,
+        )
