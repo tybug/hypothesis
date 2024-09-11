@@ -534,9 +534,11 @@ def mutate_bytes(value, *, min_size, max_size, random):
 
 class CorpusHandler(FileSystemEventHandler):
     def on_created(self, event):
-        if event.is_directory:
+        p = Path(event.src_path)
+        if p.is_dir or not p.exists():
             return
-        data = Path(event.src_path).read_bytes()
+
+        data = p.read_bytes()
         # this is potentially violated if libfuzzer waits longer than
         # data_to_bounds_unsaved.max_size inputs to try a new input. I don't
         # fully understand the entropic scheduler but this seems extraordinarily
