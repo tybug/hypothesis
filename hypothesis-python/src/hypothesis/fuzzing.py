@@ -47,9 +47,7 @@ FLOAT_SIZES = (8, 16, 32, 64, 128, 1024)
 FLOAT_SIZES_WEIGHTS = (4.0, 8.0, 1.0, 1.0, 0.5, 0.5)
 Bounds: TypeAlias = Dict[Tuple[int, int], Tuple[IRTypeName, IRKWargsType, IRType]]
 # explicitly not thread-local so that the watchdog thread can access it
-data_to_bounds_unsaved: Mapping[bytes, Bounds] = LRUCache(
-    15_000, threadlocal=False
-)
+data_to_bounds_unsaved: Mapping[bytes, Bounds] = LRUCache(15_000, threadlocal=False)
 # stores bounds for interesting / actual corpus data. unbounded
 data_to_bounds: Dict[bytes, Bounds] = {}
 
