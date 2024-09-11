@@ -73,7 +73,11 @@ from hypothesis.errors import (
     Unsatisfiable,
     UnsatisfiedAssumption,
 )
-from hypothesis.fuzzing import AtherisProvider, _custom_mutator
+from hypothesis.fuzzing import (
+    AtherisProvider,
+    _custom_mutator,
+    watch_directory_for_corpus,
+)
 from hypothesis.internal.compat import (
     PYPY,
     BaseExceptionGroup,
@@ -1472,6 +1476,8 @@ class HypothesisHandle:
             use_atheris=True,
         )
         atheris.Setup(argv, fuzz_one_input, custom_mutator=_custom_mutator)
+
+        watch_directory_for_corpus(corpus_dir)
         atheris.Fuzz()
 
 

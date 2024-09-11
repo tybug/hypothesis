@@ -13,23 +13,17 @@
 import math
 import time
 from contextlib import contextmanager
+from pathlib import Path
 from random import Random
-from typing import (
-    Mapping,
-    Optional,
-    Tuple,
-)
+from typing import Dict, Mapping, Optional, Tuple, TypeAlias
 
+from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
 
-from hypothesis.errors import (
-    StopTest,
-)
+from hypothesis.errors import StopTest
 from hypothesis.internal import floats as flt
-from hypothesis.internal.cache import LRUReusedCache
-from hypothesis.internal.compat import (
-    int_from_bytes,
-    int_to_bytes,
-)
+from hypothesis.internal.cache import LRUCache
+from hypothesis.internal.compat import int_from_bytes, int_to_bytes
 from hypothesis.internal.conjecture.data import (
     BYTE_MASKS,
     COLLECTION_DEFAULT_MAX_SIZE,
@@ -42,27 +36,22 @@ from hypothesis.internal.conjecture.data import (
     bits_to_bytes,
     ir_value_permitted,
 )
-from hypothesis.internal.conjecture.engine import (
-    BUFFER_SIZE,
-    PrimitiveProvider,
-)
-from hypothesis.internal.conjecture.junkdrawer import (
-    clamp,
-    replace_all,
-)
+from hypothesis.internal.conjecture.engine import BUFFER_SIZE, PrimitiveProvider
+from hypothesis.internal.conjecture.junkdrawer import clamp, replace_all
 from hypothesis.internal.conjecture.utils import _calc_p_continue
 from hypothesis.internal.floats import next_down, next_up, sign_aware_lte
 
-
-
-BOUNDS_CACHE_SIZE = 16_384  # 2**14
 INT_SIZES = (8, 16, 32, 64, 128)
 INT_SIZES_WEIGHTS = (4.0, 8.0, 1.0, 1.0, 0.5)
 FLOAT_SIZES = (8, 16, 32, 64, 128, 1024)
 FLOAT_SIZES_WEIGHTS = (4.0, 8.0, 1.0, 1.0, 0.5, 0.5)
-data_to_bounds: Mapping[
-    bytes, Mapping[Tuple[int, int], Tuple[IRTypeName, IRKWargsType, IRType]]
-] = LRUReusedCache(BOUNDS_CACHE_SIZE)
+Bounds: TypeAlias = Mapping[Tuple[int, int], Tuple[IRTypeName, IRKWargsType, IRType]]
+# explicitly not thread-local so that the watchdog thread can access it
+data_to_bounds_unsaved: Mapping[bytes, Bounds] = LRUCache(
+    16_384, threadlocal=False
+)  # 2 ** 14
+# stores bounds for interesting / actual corpus data. unbounded
+data_to_bounds: Dict[bytes, Bounds] = {}
 
 statistics = {
     "per_item_stats": [],
@@ -542,6 +531,32 @@ def mutate_bytes(value, *, min_size, max_size, random):
         )
     )
 
+class CorpusHandler(FileSystemEventHandler):
+    def on_created(self, event):
+        if event.is_directory:
+            return
+        data = Path(event.src_path).read_bytes()
+        # this is potentially violated if libfuzzer waits longer than
+        # data_to_bounds_unsaved.max_size inputs to try a new input. I don't
+        # fully understand the entropic scheduler but this seems extraordinarily
+        # unlikely bordering on impossible. but ive been bitten before...
+        # assert data in data_to_bounds_unsaved, (data, data_to_bounds_unsaved)
+        if data not in data_to_bounds_unsaved:
+            print(
+                "WARNING: saved corpus file not present in our time-limited "
+                f"cache.\ncache size: {len(data_to_bounds_unsaved)}\ndata: {data}"
+                f"\ncache: {data_to_bounds_unsaved}"
+            )
+            return
+        data_to_bounds[data] = data_to_bounds_unsaved[data]
+
+
+def watch_directory_for_corpus(p):
+    event_handler = CorpusHandler()
+    observer = Observer()
+    observer.schedule(event_handler, p, recursive=False)
+    observer.start()
+
 
 def _custom_mutator(data, buffer_size, seed):
     return custom_mutator(data, random=Random(seed), blackbox=True)
@@ -722,8 +737,6 @@ def custom_mutator(data, *, random, blackbox):
     return data
 
 
-
-
 class AtherisData(ConjectureData):
     def draw_bits(
         self,
@@ -798,4 +811,4 @@ class AtherisProvider(PrimitiveProvider):
         yield
         # explicitly don't use try/finally as we don't want to set data_to_bounds
         # in the case of mark_overrun. we may want to change this in the future.
-        data_to_bounds[self.prefix] = self.bounds
+        data_to_bounds_unsaved[self.prefix] = self.bounds
