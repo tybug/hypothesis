@@ -1407,7 +1407,18 @@ class HypothesisHandle:
     inner_test = attr.ib()
     _get_fuzz_target = attr.ib()
     _given_kwargs = attr.ib()
-    _settings = attr.ib()
+    _wrapped_test = attr.ib()
+
+    @property
+    def _settings(self):
+        # intentionally defer the lookup on wrapped_test here instead of passing
+        # settings to HypothesisHandle so that @settings decorators which are
+        # executed after @given have a chance to annotate their settings; e.g.
+        #
+        # @settings(database=None)
+        # @given(st.integers())
+        # def f(n): ...
+        return self._wrapped_test._hypothesis_internal_use_settings
 
     @property
     def fuzz_one_input(
@@ -1870,7 +1881,7 @@ def given(
             inner_test=test,
             get_fuzz_target=_get_fuzz_target,
             given_kwargs=given_kwargs,
-            settings=wrapped_test._hypothesis_internal_use_settings,
+            wrapped_test=wrapped_test,
         )
         return wrapped_test
 
