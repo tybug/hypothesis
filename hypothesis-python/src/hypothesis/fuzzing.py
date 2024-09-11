@@ -590,8 +590,17 @@ def custom_mutator(data, *, random, blackbox):
     try:
         bounds = data_to_bounds[data]
     except KeyError:
-        # we haven't seen this data before. atheris is trying a fresh input.
-        return _fresh()
+        # sometimes the entropic scheduler will mutate an input we just generated,
+        # but didn't deem interesting. if we still have that in the lru cache,
+        # great - use it.
+        try:
+            bounds = data_to_bounds_unsaved[data]
+        except KeyError:
+            # if it's expired from the cache, degrade to blackbox.
+            # TODO this happens a lot in the beginning even when our cache is
+            # definitely not full. something else is going on here. what is libfuzzer
+            # doing? does it also do blackbox with some p?
+            return _fresh()
     if track_per_item_stats:
         stats["mode"] = "mutate"
 
