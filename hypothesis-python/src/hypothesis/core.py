@@ -17,6 +17,7 @@ import inspect
 import io
 import math
 import sys
+import tempfile
 import time
 import traceback
 import types
@@ -25,6 +26,7 @@ import warnings
 import zlib
 from collections import defaultdict
 from functools import partial
+from pathlib import Path
 from random import Random
 from typing import (
     TYPE_CHECKING,
@@ -1454,12 +1456,14 @@ class HypothesisHandle:
         if corpus_dir is not None:
             argv += [str(corpus_dir)]
         elif self._settings.database is not None:
-            corpus_directory = storage_directory(
+            corpus_dir = storage_directory(
                 "corpus", _hash(function_digest(self.inner_test))
             )
-            corpus_directory.mkdir(exist_ok=True, parents=True)
-            argv += [str(corpus_directory)]
+            corpus_dir.mkdir(exist_ok=True, parents=True)
+        else:
+            corpus_dir = Path(tempfile.mkdtemp())
 
+        argv += [str(corpus_dir)]
         argv += [f"-{k}={v}" for k, v in _kwargs.items()]
 
         fuzz_one_input = self._get_fuzz_target(
