@@ -10,6 +10,7 @@
 
 import threading
 from collections import OrderedDict
+from types import SimpleNamespace
 
 import attr
 
@@ -307,10 +308,10 @@ class LRUCache:
     # Anecdotally, OrderedDict seems quite competitive with lru_cache, but perhaps
     # that is localized to our access patterns.
 
-    def __init__(self, max_size):
+    def __init__(self, max_size, *, threadlocal=True):
         assert max_size > 0
         self.max_size = max_size
-        self._threadlocal = threading.local()
+        self._threadlocal = threading.local() if threadlocal else SimpleNamespace()
 
     @property
     def cache(self):
