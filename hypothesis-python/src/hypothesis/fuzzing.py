@@ -200,7 +200,7 @@ def _mutate_integer(*, min_value, max_value, random):
 
 
 def nearby_number(value, *, min_value, max_value, random_value):
-    r = 100 / 2
+    r = 10
     min_point = value - r
     max_point = value + r
     if min_value is not None:
