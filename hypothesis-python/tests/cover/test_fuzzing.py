@@ -17,14 +17,15 @@ from random import Random
 import pytest
 
 from hypothesis import assume, example, given, settings, strategies as st
-from hypothesis.core import BUFFER_SIZE, custom_mutator, mutate_string
+from hypothesis.core import BUFFER_SIZE
+from hypothesis.fuzzing import custom_mutator, mutate_string
 from hypothesis.internal.floats import SMALLEST_SUBNORMAL, next_down, next_up
 from hypothesis.internal.intervalsets import IntervalSet
 from hypothesis.internal.reflection import get_pretty_function_description
 
+from tests.common.strategies import intervals
 from tests.common.utils import flaky
 from tests.conjecture.common import run_to_buffer
-from tests.common.strategies import intervals
 
 MARKER = uuid.uuid4().hex
 
@@ -267,6 +268,7 @@ def test_can_splice_bytes(target):
 
     if len(target) > 1:
         fuzz(f, start=start, mode="baseline", max_examples=10_000)
+
 
 @example(IntervalSet.from_string("abcdefg"))
 @example(IntervalSet.from_string(string.printable))
