@@ -100,6 +100,7 @@ setuptools.setup(
         "attrs>=22.2.0",
         "exceptiongroup>=1.0.0 ; python_version<'3.11'",
         "sortedcontainers>=2.1.0,<3.0.0",
+        "watchdog>=5.0.0",
     ],
     python_requires=">=3.8",
     classifiers=[
