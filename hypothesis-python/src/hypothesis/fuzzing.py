@@ -45,11 +45,11 @@ INT_SIZES = (8, 16, 32, 64, 128)
 INT_SIZES_WEIGHTS = (4.0, 8.0, 1.0, 1.0, 0.5)
 FLOAT_SIZES = (8, 16, 32, 64, 128, 1024)
 FLOAT_SIZES_WEIGHTS = (4.0, 8.0, 1.0, 1.0, 0.5, 0.5)
-Bounds: TypeAlias = Mapping[Tuple[int, int], Tuple[IRTypeName, IRKWargsType, IRType]]
+Bounds: TypeAlias = Dict[Tuple[int, int], Tuple[IRTypeName, IRKWargsType, IRType]]
 # explicitly not thread-local so that the watchdog thread can access it
 data_to_bounds_unsaved: Mapping[bytes, Bounds] = LRUCache(
-    16_384, threadlocal=False
-)  # 2 ** 14
+    15_000, threadlocal=False
+)
 # stores bounds for interesting / actual corpus data. unbounded
 data_to_bounds: Dict[bytes, Bounds] = {}
 
@@ -531,6 +531,7 @@ def mutate_bytes(value, *, min_size, max_size, random):
         )
     )
 
+
 class CorpusHandler(FileSystemEventHandler):
     def on_created(self, event):
         if event.is_directory:
@@ -579,9 +580,9 @@ def custom_mutator(data, *, random, blackbox):
         # returning randbytes(BUFFER_SIZE) probably has performance implications.
         return random.randbytes(BUFFER_SIZE)
 
-    # blackbox exploratory/warmup phase for the first 5k inputs / 5 seconds
+    # blackbox exploratory/warmup phase for the first 1k inputs
     # TODO we probably want an adaptive tradeoff here, "blackbox until n consecutive uninteresting inputs"
-    if blackbox and (statistics["num_calls"] < 5000 or statistics["time_mutating"] < 5):
+    if blackbox and statistics["num_calls"] < 1000:
         return _fresh()
 
     try:
