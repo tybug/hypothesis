@@ -1448,18 +1448,6 @@ class HypothesisHandle:
         # defaults to 4096 in libfuzzer. we want the ability to grow up to BUFFER_SIZE.
         _kwargs["max_len"] = BUFFER_SIZE
 
-        # There are two reasonable ways to implement input reduction, and I don't
-        # know which one libfuzzer chooses:
-        #
-        # (1) check if generate inputs happen to be smaller with the same feature set
-        # (2) explicitly spend time searching for reduced inputs
-        #
-        # We only care about reducing inputs insofar as they help us avoid hard
-        # overruns. They don't give the same mutation benefit as in standard libfuzzer.
-        # So if libfuzzer does (2), we want to disable it. But if libfuzze does (1),
-        # leaving it enabled (the default) is still probably net positive.
-        # _kwargs["reduce_inputs"] = 0
-
         # maintain argv[0] as the invoked python file, which seems to be the
         # structure atheris expects. not doing so throws off arg order interpretation.
         argv = ["__main__"]
