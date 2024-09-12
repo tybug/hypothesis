@@ -768,7 +768,7 @@ class AtherisData(ConjectureData):
             # we fill these bits randomly. It makes no difference when re-reading
             # the forced value and ensures we maintain full randomness during
             # misalignments.
-            m = 0 if n % 8 == 0 else self.random.randint(0, 2 ** (8 - (n % 8)) - 1)
+            m = 0 if n % 8 == 0 else self.random.getrandbits(8 - (n % 8))
             buf = int_to_bytes(forced | (m << n), n_bytes)
             result = forced
         else:
