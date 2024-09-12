@@ -540,7 +540,8 @@ class CorpusHandler(FileSystemEventHandler):
         # this is potentially violated if libfuzzer waits longer than
         # data_to_bounds_unsaved.max_size inputs to try a new input. I don't
         # fully understand the entropic scheduler but this seems extraordinarily
-        # unlikely bordering on impossible. but ive been bitten before...
+        # unlikely bordering on impossible. But I've been bitten by impossible
+        # things before...
         # assert data in data_to_bounds_unsaved, (data, data_to_bounds_unsaved)
         if data not in data_to_bounds_unsaved:
             print(
