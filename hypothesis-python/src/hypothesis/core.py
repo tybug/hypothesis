@@ -401,7 +401,7 @@ def _invalid(message, *, exc=InvalidArgument, test, given_kwargs):
         inner_test=test,
         get_fuzz_target=wrapped_test,
         given_kwargs=given_kwargs,
-        settings=None,
+        wrapped_test=None,
     )
     return wrapped_test
 
