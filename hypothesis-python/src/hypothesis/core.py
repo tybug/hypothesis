@@ -1822,7 +1822,7 @@ def given(
                 if use_atheris:
                     data = ConjectureData(BUFFER_SIZE, b"", provider=AtherisProvider)
                     # TODO proper init/setup interface
-                    data.provider.prefix = buffer
+                    data.provider.buffer = buffer
                     global custom_mutator_called
                     custom_mutator_called = False
                 else:

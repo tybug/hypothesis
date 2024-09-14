@@ -8,35 +8,31 @@
 # v. 2.0. If a copy of the MPL was not distributed with this file, You can
 # obtain one at https://mozilla.org/MPL/2.0/.
 
-"""This module provides the core primitives of Hypothesis, such as given."""
-
+import json
 import math
 import time
 from contextlib import contextmanager
 from pathlib import Path
 from random import Random
-from typing import Dict, Mapping, Optional, Tuple, TypeAlias
+from typing import Dict, List, Mapping, Tuple, TypeAlias
 
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
+from hypothesis.database import ir_from_bytes, ir_to_bytes
 from hypothesis.errors import StopTest
 from hypothesis.internal import floats as flt
 from hypothesis.internal.cache import LRUCache
-from hypothesis.internal.compat import int_from_bytes, int_to_bytes
 from hypothesis.internal.conjecture.data import (
-    BYTE_MASKS,
     COLLECTION_DEFAULT_MAX_SIZE,
     NASTY_FLOATS,
-    ConjectureData,
     IRKWargsType,
     IRType,
     IRTypeName,
-    Status,
-    bits_to_bytes,
+    ir_to_buffer,
     ir_value_permitted,
 )
-from hypothesis.internal.conjecture.engine import BUFFER_SIZE, PrimitiveProvider
+from hypothesis.internal.conjecture.engine import PrimitiveProvider
 from hypothesis.internal.conjecture.junkdrawer import clamp, replace_all
 from hypothesis.internal.conjecture.utils import _calc_p_continue
 from hypothesis.internal.floats import next_down, next_up, sign_aware_lte
@@ -45,11 +41,11 @@ INT_SIZES = (8, 16, 32, 64, 128)
 INT_SIZES_WEIGHTS = (4.0, 8.0, 1.0, 1.0, 0.5)
 FLOAT_SIZES = (8, 16, 32, 64, 128, 1024)
 FLOAT_SIZES_WEIGHTS = (4.0, 8.0, 1.0, 1.0, 0.5, 0.5)
-Bounds: TypeAlias = Dict[Tuple[int, int], Tuple[IRTypeName, IRKWargsType, IRType]]
+Draw: TypeAlias = Tuple[IRTypeName, IRKWargsType, IRType]
 # explicitly not thread-local so that the watchdog thread can access it
-data_to_bounds_unsaved: Mapping[bytes, Bounds] = LRUCache(15_000, threadlocal=False)
+data_to_draws_unsaved: Mapping[bytes, List[Draw]] = LRUCache(15_000, threadlocal=False)
 # stores bounds for interesting / actual corpus data. unbounded
-data_to_bounds: Dict[bytes, Bounds] = {}
+data_to_draws: Dict[bytes, List[Draw]] = {}
 
 statistics = {
     "per_item_stats": [],
@@ -515,6 +511,12 @@ def mutate_string(value, *, min_size, max_size, intervals, random):
     )
 
 
+def mutate_boolean(value, *, p):
+    assert 0 < p < 1
+    assert value in {True, False}
+    return not value
+
+
 def mutate_bytes(value, *, min_size, max_size, random):
     def draw_element():
         return random.randint(0, 255)
@@ -538,19 +540,19 @@ class CorpusHandler(FileSystemEventHandler):
 
         data = p.read_bytes()
         # this is potentially violated if libfuzzer waits longer than
-        # data_to_bounds_unsaved.max_size inputs to try a new input. I don't
+        # data_to_draws_unsaved.max_size inputs to try a new input. I don't
         # fully understand the entropic scheduler but this seems extraordinarily
         # unlikely bordering on impossible. But I've been bitten by impossible
         # things before...
-        # assert data in data_to_bounds_unsaved, (data, data_to_bounds_unsaved)
-        if data not in data_to_bounds_unsaved:
+        # assert data in data_to_draws_unsaved, (data, data_to_draws_unsaved)
+        if data not in data_to_draws_unsaved:
             print(
                 "WARNING: saved corpus file not present in our time-limited "
-                f"cache.\ncache size: {len(data_to_bounds_unsaved)}\ndata: {data}"
-                f"\ncache: {data_to_bounds_unsaved}"
+                f"cache.\ncache size: {len(data_to_draws_unsaved)}\ndata: {data}"
+                f"\ncache: {data_to_draws_unsaved}"
             )
             return
-        data_to_bounds[data] = data_to_bounds_unsaved[data]
+        data_to_draws[data] = data_to_draws_unsaved[data]
 
 
 def watch_directory_for_corpus(p):
@@ -562,6 +564,16 @@ def watch_directory_for_corpus(p):
 
 def _custom_mutator(data, buffer_size, seed):
     return custom_mutator(data, random=Random(seed), blackbox=True)
+
+
+def _get_draws_from_cache(buffer):
+    try:
+        return data_to_draws[buffer]
+    except KeyError:
+        try:
+            return data_to_draws_unsaved[buffer]
+        except KeyError:
+            return None
 
 
 def custom_mutator(data, *, random, blackbox):
@@ -577,49 +589,46 @@ def custom_mutator(data, *, random, blackbox):
 
     def _fresh():
         stats["mode"] = "fresh"
-        # ramp up to buffer_size or pick a weighted length from [0, buffer_size]?
-        # returning randbytes(BUFFER_SIZE) probably has performance implications.
-        return random.randbytes(BUFFER_SIZE)
+        # this is only used as the random seed unless it coincidentally is a valid
+        # ir bytestream. so we don't need BUFFER_SIZE randomness here.
+        return random.randbytes(10)
 
     # blackbox exploratory/warmup phase for the first 1k inputs
     # TODO we probably want an adaptive tradeoff here, "blackbox until n consecutive uninteresting inputs"
     if blackbox and statistics["num_calls"] < 1000:
         return _fresh()
 
-    try:
-        bounds = data_to_bounds[data]
-    except KeyError:
-        # sometimes the entropic scheduler will mutate an input we just generated,
-        # but didn't deem interesting. if we still have that in the lru cache,
-        # great - use it.
-        try:
-            bounds = data_to_bounds_unsaved[data]
-        except KeyError:
-            # if it's expired from the cache, degrade to blackbox.
-            # TODO this happens a lot in the beginning even when our cache is
-            # definitely not full. something else is going on here. what is libfuzzer
-            # doing? does it also do blackbox with some p?
-            return _fresh()
+    # sometimes the entropic scheduler will mutate an input we just generated,
+    # but didn't deem interesting. if we still have that in the front cache,
+    # great - use it.
+    draws = _get_draws_from_cache(data)
+    if draws is None:
+        # if it's not saved in the main cache and has also expired from the front
+        # cache, degrade to blackbox.
+        # TODO this happens a lot in the beginning even when our cache is
+        # definitely not full. something else is going on here. what is libfuzzer
+        # doing? does it also do blackbox with some p?
+        return _fresh()
+
     if track_per_item_stats:
         stats["mode"] = "mutate"
 
-    choices = list(bounds.keys())
-    # possibly 0 choices got made, in which case use 0 mutations.
+    # possibly 0 draws got made, in which case use 0 mutations.
     num_mutations_ = num_mutations(
-        min_size=min(1, len(choices)), max_size=len(choices), random=random
+        min_size=min(1, len(draws)), max_size=len(draws), random=random
     )
-    mutations = random.sample(range(len(choices)), num_mutations_)
+    mutations = random.sample(range(len(draws)), num_mutations_)
     if track_per_item_stats:
         stats["num_mutations"] = len(mutations)
-        stats["before"] = [_make_serializable(v) for (_, _, v) in bounds.values()]
+        stats["before"] = [_make_serializable(v) for (_, _, v) in draws]
         stats["mutations"] = []
-        after = [_make_serializable(v) for (_, _, v) in bounds.values()]
+        after = [_make_serializable(v) for (_, _, v) in draws]
 
-    def _get_splice_choices(location, ir_type, kwargs):
+    def _get_splice_choices(index, ir_type, kwargs):
         splices = []
-        for splice_location, (splice_ir_type, _splice_kwargs, value) in bounds.items():
-            # don't splice an ir node with itself (same start, end value)
-            if location == splice_location:
+        for i, (splice_ir_type, _splice_kwargs, value) in enumerate(draws):
+            # don't splice an ir node with itself
+            if index == i:
                 continue
             if ir_type != splice_ir_type:
                 continue
@@ -632,8 +641,7 @@ def custom_mutator(data, *, random, blackbox):
     # TODO with probability 0.2, do only splices (average of 2 maybe?). or sometimes
     # try splice *ranges* - ranges of ir the same ir types
     for i in mutations:
-        start, end = choices[i]
-        (ir_type, kwargs, value) = bounds[(start, end)]
+        (ir_type, kwargs, value) = draws[i]
         # TODO reconsider forced value handling - re-sample from num mutations?
         # or sample by construction to avoid sampling forced nodes?
         if kwargs["forced"] is not None:
@@ -644,7 +652,7 @@ def custom_mutator(data, *, random, blackbox):
         # 10% chance for a mutation to be a splice (copy) of an existing node of
         # the same type instead
         if random.randint(0, 9) == 0 and (
-            splice_choices := _get_splice_choices((start, end), ir_type, kwargs)
+            splice_choices := _get_splice_choices(i, ir_type, kwargs)
         ):
             mutation_type = "splice"
             forced = random.choice(splice_choices)
@@ -660,9 +668,7 @@ def custom_mutator(data, *, random, blackbox):
                 random=random,
             )
         elif ir_type == "boolean":
-            p = kwargs["p"]
-            assert 0 < p < 1
-            forced = bool(random.randint(0, 1))
+            forced = mutate_boolean(value, p=kwargs["p"])
         elif ir_type == "bytes":
             forced = mutate_bytes(
                 value,
@@ -690,21 +696,6 @@ def custom_mutator(data, *, random, blackbox):
         else:
             raise Exception(f"unhandled case ({ir_type=})")
 
-        # value of the prefix doesn't matter since we're forcing the draw.
-        cd = AtherisData(BUFFER_SIZE, prefix=bytes(BUFFER_SIZE), random=random)
-        # overwrite the forced val in the kwargs
-        kwargs = {**kwargs, "forced": forced}
-        try:
-            getattr(cd, f"draw_{ir_type}")(**kwargs)
-        except StopTest:
-            assert cd.status is Status.OVERRUN
-            # should hopefully be rare? can happen if we get unlucky with integer
-            # probes or if we increase the size of eg a string. replace with randomness
-            # in this case I guess?
-            replacement = random.randbytes(end - start)
-        else:
-            replacement = cd.buffer
-
         if track_per_item_stats:
             after[i] = _make_serializable(forced)
             stats["mutations"].append(
@@ -716,83 +707,73 @@ def custom_mutator(data, *, random, blackbox):
                     **extra_item_stats,
                 }
             )
-        replacements.append((start, end, replacement))
+        replacements.append((i, i + 1, [forced]))
 
     replacements = sorted(replacements, key=lambda v: v[0])
-    # some strategies have empty choice sequences with no bounds (st.just(None)).
-    offset = max(bounds.keys(), key=lambda v: v[1])[1] if bounds else 0
-    for u, v, r in replacements:
-        offset += len(r) - (v - u)
-    data = bytearray(replace_all(data, replacements))
-    # fully randomize each time in case we misalign and dip into the remaining buffer.
-    # we don't want to use the same randomized+saved buffer each time.
-    # this weirdness is to allow libfuzzer to REDUCE our inputs instead of always
-    # being the same BUFFER_SIZE size.
-    del data[offset:]
-    data += random.randbytes(BUFFER_SIZE // 2)
-    if len(data) > BUFFER_SIZE:
-        data = data[:BUFFER_SIZE]
-    data = bytes(data)
-    statistics["time_mutating"] += time.time() - t_start
+    ir = replace_all([v for (_, _, v) in draws], replacements)
+    data = ir_to_bytes(ir)
 
+    statistics["time_mutating"] += time.time() - t_start
     if track_per_item_stats:
         stats["after"] = after
         statistics["per_item_stats"].append(stats)
-
     if statistics["num_calls"] > print_stats_at and not stats_printed:
-        import json
-
         print("-- run statistics --")
         print(json.dumps(statistics))
         stats_printed = True
     return data
 
 
-class AtherisData(ConjectureData):
-    def draw_bits(
-        self,
-        n: int,
-        *,
-        forced: Optional[int] = None,
-        fake_forced: Optional[bool] = False,
-    ) -> int:
-        if n == 0:
-            return 0
-        assert n > 0
-        n_bytes = bits_to_bytes(n)
-        if self.index + n_bytes > len(self.prefix):
-            self.mark_overrun()
-
-        if forced is not None:
-            # if we are not asking for a multiple of 8 bits, there are 8 - (n % 8)
-            # bits worth of "unused" randomness. Rather than leaving these as 0,
-            # we fill these bits randomly. It makes no difference when re-reading
-            # the forced value and ensures we maintain full randomness during
-            # misalignments.
-            m = 0 if n % 8 == 0 else self.random.getrandbits(8 - (n % 8))
-            buf = int_to_bytes(forced | (m << n), n_bytes)
-            result = forced
-        else:
-            buf = self.prefix[self.index : self.index + n_bytes]
-            buf = bytearray(buf)
-            # If we have a number of bits that is not a multiple of 8 we have to
-            # mask off the high bits.
-            buf[0] &= BYTE_MASKS[n % 8]
-            result = int_from_bytes(buf)
-
-        assert len(buf) == n_bytes
-        self.buffer.extend(buf)
-        self.index = len(self.buffer)
-        assert result.bit_length() <= n
-        return result
-
-
 class AtherisProvider(PrimitiveProvider):
+    def draws_prefix(self, buffer):
+        def ir_type(typ):
+            return {
+                str: "string",
+                float: "float",
+                int: "integer",
+                bool: "boolean",
+                bytes: "bytes",
+            }[typ]
+
+        try:
+            values = ir_from_bytes(buffer)
+        except Exception:
+            return None
+        return [(ir_type(type(v)), v) for v in values]
+
+    def random_value(self, ir_type, kwargs):
+        try:
+            (value, buf) = ir_to_buffer(ir_type, kwargs, random=self.random)
+        except StopTest:
+            # possible for a fresh data to overrun if we get unlucky with e.g.
+            # integer probes.
+            self._cd.mark_overrun()
+        return value
+
+    def _value(self, ir_type, kwargs):
+        kwargs = {k: v for k, v in kwargs.items() if k not in {"forced", "fake_forced"}}
+        if self.draws_prefix is None:
+            # this buffer wasn't in our cache, do total random generation
+            return self.random_value(ir_type, kwargs)
+
+        if self.draws_index >= len(self.draws_prefix):
+            return self.random_value(ir_type, kwargs)
+
+        (ir_type_, value_) = self.draws_prefix[self.draws_index]
+        if ir_type_ != ir_type or not ir_value_permitted(value_, ir_type, kwargs):
+            return self.random_value(ir_type, kwargs)
+        return value_
+
     def draw_value(self, ir_type, kwargs):
-        start = self.cd.index
-        v = getattr(self.cd, f"draw_{ir_type}")(**kwargs)
-        self.bounds[(start, self.cd.index)] = (ir_type, kwargs, v)
-        return v
+        value = (
+            self._value(ir_type, kwargs)
+            if kwargs["forced"] is None
+            else kwargs["forced"]
+        )
+        self.draws_index += 1
+        draw = (ir_type, kwargs, value)
+        self.draws.append(draw)
+        return value
 
     def draw_boolean(self, **kwargs):
         return self.draw_value("boolean", kwargs)
@@ -811,15 +792,14 @@ class AtherisProvider(PrimitiveProvider):
 
     @contextmanager
     def per_test_case_context_manager(self):
-        # {(start, end): (ir_type, kwargs, value)}
-        self.bounds = {}
-        self.index = 0
-        self.buffer = bytearray()
-        # TODO seed? how to get mutator / atheris seed here?
-        self.random = Random()
-        self.cd = AtherisData(BUFFER_SIZE, prefix=self.prefix, random=self.random)
+        self.draws_prefix = self.draws_prefix(self.buffer)
+        self.draws_index = 0
+        self.draws: List[Draw] = []
+        # deterministic generation relative to the buffer, for replaying failures.
+        self.random = Random(self.buffer)
 
-        yield
-        # explicitly don't use try/finally as we don't want to set data_to_bounds
+        # explicitly don't use try/finally as we don't want to set data_to_draws
         # in the case of mark_overrun. we may want to change this in the future.
-        data_to_bounds_unsaved[self.prefix] = self.bounds
+        yield
+
+        data_to_draws_unsaved[self.buffer] = self.draws

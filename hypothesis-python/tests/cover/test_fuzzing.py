@@ -18,14 +18,14 @@ import pytest
 
 from hypothesis import assume, example, given, settings, strategies as st
 from hypothesis.core import BUFFER_SIZE
+from hypothesis.database import ir_to_bytes
 from hypothesis.fuzzing import custom_mutator, mutate_string
-from hypothesis.internal.floats import SMALLEST_SUBNORMAL, next_down, next_up
+from hypothesis.internal.floats import next_down, next_up
 from hypothesis.internal.intervalsets import IntervalSet
 from hypothesis.internal.reflection import get_pretty_function_description
 
 from tests.common.strategies import intervals
 from tests.common.utils import flaky
-from tests.conjecture.common import run_to_buffer
 
 MARKER = uuid.uuid4().hex
 
@@ -37,6 +37,10 @@ def fuzz(f, *, start, mode, max_examples):
     fuzz_one_input = f.hypothesis._get_fuzz_target(
         args=(), kwargs={}, use_atheris=mode == "atheris"
     )
+    if isinstance(start, list):
+        start = ir_to_bytes(start)
+    elif not isinstance(start, bytes):
+        assert False, "must be either a bytes-serialized ir or list of ir nodes"
     fuzz_one_input(start)
     for _ in range(max_examples):
         if mode == "atheris":
@@ -104,10 +108,10 @@ def test_runs_with_various_kwargs(start, strategy):
 def test_can_find_endpoints(min_value, max_value):
     assume(min_value <= max_value)
 
-    @run_to_buffer
-    def start(data):
-        data.draw(st.integers(min_value, max_value))
-        data.mark_interesting()
+    start = []
+    if max_value - min_value > 127:
+        start.append(42)
+    start.append((min_value + max_value) // 2)
 
     for target in [min_value, max_value]:
         print("target", target)
@@ -143,13 +147,11 @@ def test_can_find_nearby_integers(target, offset, min_offset, max_offset):
     def f(n):
         assert n != target + offset, MARKER
 
-    @run_to_buffer
-    def start(data):
-        # remove this when we move st.integers weighting off of two-integer-draws
-        if min_offset is not None and max_offset is not None:
-            data.draw_integer(0, 127, forced=20)
-        data.draw_integer(min_value=min_value, max_value=max_value, forced=target)
-        data.mark_interesting()
+    start = []
+    # remove this when we move st.integers weighting off of two-integer-draws
+    if min_offset is not None and max_offset is not None:
+        start.append(42)
+    start.append(target)
 
     # atheris should find this and baseline shouldn't.
     with pytest.raises(AssertionError, match=MARKER):
@@ -160,17 +162,22 @@ def test_can_find_nearby_integers(target, offset, min_offset, max_offset):
 
 @pytest.mark.parametrize(
     "target, offset",
-    [(192837123, 8), (-8712313, 4), (918273, 2), (-94823, -2), (912873192312387, -5)],
+    [
+        (192837123.0, 8.0),
+        (-8712313.0, 4.0),
+        (918273.0, 2.0),
+        (-94823.0, -2.0),
+        (912873192312387.0, -5.0),
+    ],
 )
 @pytest.mark.parametrize(
-    "min_offset, max_offset", [(None, None), (1234, None), (None, 1234), (1234, 1234)]
+    "min_offset, max_offset",
+    [(None, None), (1234.0, None), (None, 1234.0), (1234.0, 1234.0)],
 )
 @flaky(max_runs=3, min_passes=1)
 def test_can_find_nearby_floats(target, offset, min_offset, max_offset):
-    min_value = next_up(-math.inf) if min_offset is None else float(target - min_offset)
-    max_value = (
-        next_down(math.inf) if max_offset is None else float(target + max_offset)
-    )
+    min_value = next_up(-math.inf) if min_offset is None else target - min_offset
+    max_value = next_down(math.inf) if max_offset is None else target + max_offset
 
     @settings(database=None)
     @given(
@@ -185,17 +192,7 @@ def test_can_find_nearby_floats(target, offset, min_offset, max_offset):
         # we're never going to hit the offset exactly with floats. just get close.
         assert abs(n - (target + offset)) > 1.5, MARKER
 
-    @run_to_buffer
-    def start(data):
-        data.draw_float(
-            min_value=min_value,
-            max_value=max_value,
-            allow_nan=False,
-            smallest_nonzero_magnitude=SMALLEST_SUBNORMAL,
-            forced=target,
-        )
-        data.mark_interesting()
-
+    start = [target]
     with pytest.raises(AssertionError, match=MARKER):
         fuzz(f, start=start, mode="atheris", max_examples=1_000)
 
@@ -219,16 +216,7 @@ def test_can_splice_strings(target):
     def f(s):
         assert s != target, MARKER
 
-    @run_to_buffer
-    def start(data):
-        data.draw_string(
-            intervals=IntervalSet(((0, 55295), (57344, 1114111))),
-            min_size=0,
-            max_size=math.inf,
-            forced="bbaaxX",
-        )
-        data.mark_interesting()
-
+    start = ["bbaaxX"]
     with pytest.raises(AssertionError, match=MARKER):
         fuzz(f, start=start, mode="atheris", max_examples=10_000)
 
@@ -254,15 +242,7 @@ def test_can_splice_bytes(target):
     def f(s):
         assert s != target, MARKER
 
-    @run_to_buffer
-    def start(data):
-        data.draw_bytes(
-            min_size=0,
-            max_size=math.inf,
-            forced=b"bbaaxX",
-        )
-        data.mark_interesting()
-
+    start = [b"bbaaxX"]
     with pytest.raises(AssertionError, match=MARKER):
         fuzz(f, start=start, mode="atheris", max_examples=10_000)
 

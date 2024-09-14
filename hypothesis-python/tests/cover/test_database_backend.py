@@ -20,7 +20,7 @@ from typing import Iterator, Optional, Tuple
 
 import pytest
 
-from hypothesis import configuration, given, settings, strategies as st, example
+from hypothesis import configuration, example, given, settings, strategies as st
 from hypothesis.database import (
     DirectoryBasedExampleDatabase,
     ExampleDatabase,

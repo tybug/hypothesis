@@ -673,6 +673,7 @@ class GitHubArtifactDatabase(ExampleDatabase):
     def delete(self, key: bytes, value: bytes) -> None:
         raise RuntimeError(self._read_only_message)
 
+
 def ir_to_bytes(ir: Iterable[IRType], /) -> bytes:
     """Deserialize a bytestring to a list of IR elements.  Inverts ir_from_bytes."""
     # We use a custom serialization format for this, which might seem crazy - but our
