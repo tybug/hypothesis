@@ -19,13 +19,15 @@ import pytest
 from hypothesis import assume, example, given, settings, strategies as st
 from hypothesis.core import BUFFER_SIZE
 from hypothesis.database import ir_to_bytes
-from hypothesis.fuzzing import custom_mutator, mutate_string
+from hypothesis.fuzzing import AtherisProvider, custom_mutator, mutate_string
+from hypothesis.internal.conjecture.data import ConjectureData, ir_value_equal
 from hypothesis.internal.floats import next_down, next_up
 from hypothesis.internal.intervalsets import IntervalSet
 from hypothesis.internal.reflection import get_pretty_function_description
 
 from tests.common.strategies import intervals
 from tests.common.utils import flaky
+from tests.conjecture.common import ir_types_and_kwargs
 
 MARKER = uuid.uuid4().hex
 
@@ -286,3 +288,30 @@ def test_mutate_string_on_weird_intervals(intervals):
             intervals=intervals,
             random=r,
         )
+
+
+@given(
+    # cover the case where basically nothing aligns with st.binary(). serialized_ir()
+    # will align if we get lucky and the draws from ir_types_and_kwargs() line
+    # up, and will produce misalignments (draw a random value) otherwise. all of
+    # these combinations are good for testing since the nondeterminism comes into
+    # play largely or entirely when we draw new random values.
+    serialized_ir() | st.binary(),
+    st.lists(ir_types_and_kwargs()),
+)
+@settings(max_examples=500)
+def test_replaying_buffer_is_deterministic(buffer, draws):
+    data1 = ConjectureData(BUFFER_SIZE, b"", provider=AtherisProvider)
+    data2 = ConjectureData(BUFFER_SIZE, b"", provider=AtherisProvider)
+    data1.provider.buffer = buffer
+    data2.provider.buffer = buffer
+
+    # we're currently abusing the context manager for init purposes on the provider
+    with (
+        data1.provider.per_test_case_context_manager(),
+        data2.provider.per_test_case_context_manager(),
+    ):
+        for ir_type, kwargs in draws:
+            v1 = getattr(data1, f"draw_{ir_type}")(**kwargs)
+            v2 = getattr(data2, f"draw_{ir_type}")(**kwargs)
+            assert ir_value_equal(ir_type, v1, v2)
