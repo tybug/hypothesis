@@ -569,7 +569,7 @@ def _custom_mutator(data, buffer_size, seed):
     # seeding a random instance is actually not cheap. this random only controls
     # *mutations*, which we don't care about being deterministic (we want *replay*s
     # of buffers to be deterministic). so dont seed.
-    return custom_mutator(data, random=Random(), blackbox=True)
+    return custom_mutator(data, random=Random(), blackbox=False)
 
 
 def _get_draws_from_cache(buffer):
