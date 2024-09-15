@@ -569,7 +569,7 @@ def _custom_mutator(data, buffer_size, seed):
     # seeding a random instance is actually not cheap. this random only controls
     # *mutations*, which we don't care about being deterministic (we want *replay*s
     # of buffers to be deterministic). so dont seed.
-    return custom_mutator(data, random=Random(), blackbox=False)
+    return custom_mutator(data, random=Random(), blackbox=True)
 
 
 def _get_draws_from_cache(buffer):
@@ -602,7 +602,7 @@ def custom_mutator(data, *, random, blackbox):
 
     # blackbox exploratory/warmup phase for the first 1k inputs
     # TODO we probably want an adaptive tradeoff here, "blackbox until n consecutive uninteresting inputs"
-    if blackbox and statistics["num_calls"] < 1000:
+    if blackbox and statistics["num_calls"] < 300:
         return _fresh()
 
     # sometimes the entropic scheduler will mutate an input we just generated,
