@@ -1451,8 +1451,10 @@ class HypothesisHandle:
         if kwargs is None:
             kwargs = {}
 
-        # defaults to 4096 in libfuzzer. we want the ability to grow up to BUFFER_SIZE.
-        _kwargs["max_len"] = BUFFER_SIZE
+        # defaults to 4096 in libfuzzer. we're abusing the buffer to carry our
+        # serialized ir, so we don't have an exact max_len <-> BUFFER_SIZE
+        # correspondence.
+        _kwargs["max_len"] = sys.maxsize
 
         # maintain argv[0] as the invoked python file, which seems to be the
         # structure atheris expects. not doing so throws off arg order interpretation.
