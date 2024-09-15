@@ -1447,6 +1447,7 @@ class HypothesisHandle:
 
     def fuzz_with_atheris(self, *, kwargs=None, corpus_dir=None, **_kwargs):
         import atheris
+        from hypothesis.fuzzing import MAX_SERIALIZED_SIZE
 
         if kwargs is None:
             kwargs = {}
@@ -1454,7 +1455,7 @@ class HypothesisHandle:
         # defaults to 4096 in libfuzzer. we're abusing the buffer to carry our
         # serialized ir, so we don't have an exact max_len <-> BUFFER_SIZE
         # correspondence.
-        _kwargs["max_len"] = sys.maxsize
+        _kwargs["max_len"] = MAX_SERIALIZED_SIZE
 
         # maintain argv[0] as the invoked python file, which seems to be the
         # structure atheris expects. not doing so throws off arg order interpretation.

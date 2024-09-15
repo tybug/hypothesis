@@ -22,6 +22,7 @@ from watchdog.observers import Observer
 from hypothesis.database import ir_from_bytes, ir_to_bytes
 from hypothesis.errors import StopTest
 from hypothesis.internal import floats as flt
+from hypothesis.internal.conjecture.engine import BUFFER_SIZE
 from hypothesis.internal.cache import LRUCache
 from hypothesis.internal.conjecture.data import (
     COLLECTION_DEFAULT_MAX_SIZE,
@@ -580,6 +581,7 @@ def _get_draws_from_cache(buffer):
         except KeyError:
             return None
 
+MAX_SERIALIZED_SIZE = BUFFER_SIZE * 2
 
 def custom_mutator(data, *, random, blackbox):
     t_start = time.time()
@@ -717,6 +719,8 @@ def custom_mutator(data, *, random, blackbox):
     replacements = sorted(replacements, key=lambda v: v[0])
     ir = replace_all([v for (_, _, v) in draws], replacements)
     data = ir_to_bytes(ir)
+    data = data[:MAX_SERIALIZED_SIZE]
+    assert len(data) <= MAX_SERIALIZED_SIZE
 
     statistics["time_mutating"] += time.time() - t_start
     if track_per_item_stats:
