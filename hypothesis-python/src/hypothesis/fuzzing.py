@@ -581,7 +581,7 @@ def _get_draws_from_cache(buffer):
         except KeyError:
             return None
 
-MAX_SERIALIZED_SIZE = BUFFER_SIZE * 2
+MAX_SERIALIZED_SIZE = BUFFER_SIZE
 
 def custom_mutator(data, *, random, blackbox):
     t_start = time.time()
@@ -779,7 +779,18 @@ class AtherisProvider(PrimitiveProvider):
             if kwargs["forced"] is None
             else kwargs["forced"]
         )
+        assert type(value) is {
+            "string": str,
+            "float": float,
+            "integer": int,
+            "boolean": bool,
+            "bytes": bytes,
+        }[ir_type]
+
         self.draws_index += 1
+        self.serialized_size += len(ir_to_bytes([value]))
+        if self.serialized_size > MAX_SERIALIZED_SIZE:
+            self._cd.mark_overrun()
         draw = (ir_type, kwargs, value)
         self.draws.append(draw)
         return value
@@ -803,6 +814,7 @@ class AtherisProvider(PrimitiveProvider):
     def per_test_case_context_manager(self):
         self.draws_prefix = self.draws_prefix(self.buffer)
         self.draws_index = 0
+        self.serialized_size = 0
         self.draws: List[Draw] = []
         # deterministic generation relative to the buffer, for replaying failures.
         self.random = Random(self.buffer)
