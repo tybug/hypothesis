@@ -33,6 +33,20 @@ MARKER = uuid.uuid4().hex
 r = Random(random.randint(0, int(1e10)))
 
 
+@st.composite
+def serialized_ir(draw):
+    values = draw(
+        st.lists(
+            st.booleans()
+            | st.integers()
+            | st.floats()
+            | st.text(st.characters())
+            | st.binary()
+        )
+    )
+    return ir_to_bytes(values)
+
+
 def fuzz(f, *, start, mode, max_examples):
     fuzz_one_input = f.hypothesis._get_fuzz_target(
         args=(), kwargs={}, use_atheris=mode == "atheris"
@@ -91,7 +105,7 @@ def fuzz(f, *, start, mode, max_examples):
     ],
     ids=get_pretty_function_description,
 )
-@given(start=st.binary())
+@given(start=st.binary() | serialized_ir())
 @settings(deadline=None, max_examples=5)
 def test_runs_with_various_kwargs(start, strategy):
     @given(strategy)
