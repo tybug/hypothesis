@@ -100,7 +100,7 @@ def random_float_between(min_value, max_value, smallest_nonzero_magnitude, *, ra
                 # max_value - min_value can overflow. use half of the diff as the
                 # range and use the first and second half of the diff with equal prob.
                 total_range = (max_value / 2.0) - (min_value / 2.0)
-                if random.randint(0, 1) == 0:
+                if random.random() < 0.5:
                     start += total_range
             else:
                 total_range = max_value - min_value
@@ -139,6 +139,7 @@ def _mutate_integer(*, min_value, max_value, random):
         # bias towards smaller values. distribution copied from draw_integer
         bits = random.choices(INT_SIZES, INT_SIZES_WEIGHTS, k=1)[0]
         radius = 2 ** (bits - 1) - 1
+        # TODO this would be faster with random.getrandbits...
         return random.randint(-radius, radius)
 
     if min_value is None and max_value is None:
@@ -161,8 +162,9 @@ def _mutate_integer(*, min_value, max_value, random):
         # better for fuzzing (e.g. lowering the bit limit, decreasing the
         # probability from 7/8 to 1/2).
         bits = (max_value - min_value).bit_length()
-        if bits > 18 and random.randint(0, 1) == 0:
+        if bits > 18 and random.random() < 0.5:
             bits = min(bits, random.choices(INT_SIZES, INT_SIZES_WEIGHTS, k=1)[0])
+            # TODO this would be faster with getrandbits
             radius = 2 ** (bits - 1) - 1
             forced = origin + random.randint(-radius, radius)
             forced = clamp(min_value, forced, max_value)
@@ -205,7 +207,7 @@ def mutate_integer(value, *, min_value, max_value, random):
             and max_value is not None
             and (max_value - min_value) < 300
         )
-        and random.randint(0, 10) == 0
+        and random.random() < 0.1
     ):
 
         def random_value(min_point, max_point):
@@ -232,7 +234,7 @@ def mutate_float(
         (max_value - min_value) >= 300
         and not math.isinf(value)
         and not math.isnan(value)
-        and random.randint(0, 10) == 0
+        and random.random() < 0.1
     ):
 
         def random_value(min_point, max_point):
@@ -282,7 +284,7 @@ def _mutate_float(
         max_value,
     ]
     nasty_floats = [f for f in NASTY_FLOATS + boundary_values if permitted(f)]
-    if random.randint(0, 99) < 5 and nasty_floats:
+    if random.random() < 0.05 and nasty_floats:
         forced = random.choice(nasty_floats)
     else:
         min_val = min_value
@@ -313,7 +315,7 @@ def _mutate_float(
         diff = max_val - min_val
         # max - min can overflow to inf at the float boundary.
         bits = int(diff).bit_length() if not math.isinf(diff) else 1024
-        if bits > 18 and random.randint(0, 7) < 7:
+        if bits > 18 and random.random() < 7 / 8:
             bits = min(bits, random.choices(FLOAT_SIZES, FLOAT_SIZES_WEIGHTS, k=1)[0])
             radius = float(2 ** (bits - 1) - 1)
             forced = origin + random_float_between(
@@ -326,7 +328,7 @@ def _mutate_float(
             )
     # with probability 0.05, truncate to an integer-valued float
     if (
-        random.randint(0, 99) < 5
+        random.random() < 0.05
         and not math.isnan(forced)
         and not math.isinf(forced)
         and permitted(truncated := float(math.floor(forced)))
@@ -354,7 +356,7 @@ def mutate_collection(value, *, min_size, max_size, draw_element, random):
     # totally random with probability 0.1, more intelligent mutation
     # otherwise. This is me being scared of not being able to get out of small
     # size collections like the empty string, because there's nothing to mutate.
-    if random.randint(0, 9) == 0:
+    if random.random() < 0.1:
         # copied from HypothesisProvider.draw_string
         average_size = min(
             max(min_size * 2, min_size + 5),
@@ -392,20 +394,20 @@ def mutate_collection(value, *, min_size, max_size, draw_element, random):
         # for the same splice interval lest size changes get the better of us.
         replacements = {}
         for n1, n2 in splice_intervals:
-            r = random.randint(0, 3)
-            if r == 0:
+            r = random.random()
+            if r < 0.25:
                 # case: delete this interval
                 replacements[(n1, n2)] = []
-            elif r == 1 and len(splice_intervals) > 1:
+            elif r < 0.5 and len(splice_intervals) > 1:
                 # case: swap with another interval
                 (a1, a2) = random.choice(splice_intervals)
                 replacements[(n1, n2)] = value[a1:a2]
                 replacements[(a1, a2)] = value[n1:n2]
-            elif r == 2 and len(splice_intervals) > 1:
+            elif r < 0.75 and len(splice_intervals) > 1:
                 # case: replace with another interval
                 (a1, a2) = random.choice(splice_intervals)
                 replacements[(n1, n2)] = value[a1:a2]
-            elif r == 3:
+            else:
                 # case: replace with a new random string of ~similar size
                 replacements[(n1, n2)] = draw_value(
                     min_size=0, average_size=n2 - n1, max_size=(n2 - n1) * 2
@@ -414,7 +416,7 @@ def mutate_collection(value, *, min_size, max_size, draw_element, random):
         replacements = [(n1, n2, value) for (n1, n2), value in replacements.items()]
         forced = replace_all(value, replacements)
         for n in splice_points:
-            if random.randint(0, 10) == 0:
+            if random.random() < 0.1:
                 # case: insert a new random value at point n
                 # TODO I think this misses inserting at the very end, see len(forced) + 1
                 # case in `while len(forced) < min_size`
@@ -429,9 +431,9 @@ def mutate_collection(value, *, min_size, max_size, draw_element, random):
         # have many/any splice_intervals.
         if forced == value:
             n = random.randint(0, len(value))
-            if random.randint(0, 1) == 0 and len(value) > 0:
+            if random.random() < 0.5 and len(value) > 0:
                 # remove everything up to n, or after n
-                forced = forced[n:] if random.randint(0, 1) == 0 else forced[:n]
+                forced = forced[n:] if random.random() < 0.5 else forced[:n]
             else:
                 # add a string at n
                 forced = (
@@ -651,7 +653,7 @@ def custom_mutator(data, *, random, blackbox):
         mutation_type = "normal"
         # 10% chance for a mutation to be a splice (copy) of an existing node of
         # the same type instead
-        if random.randint(0, 9) == 0 and (
+        if random.random() < 0.1 and (
             splice_choices := _get_splice_choices(i, ir_type, kwargs)
         ):
             mutation_type = "splice"
