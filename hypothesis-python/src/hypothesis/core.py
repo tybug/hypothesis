@@ -1447,6 +1447,7 @@ class HypothesisHandle:
 
     def fuzz_with_atheris(self, *, kwargs=None, corpus_dir=None, **_kwargs):
         import atheris
+
         from hypothesis.fuzzing import MAX_SERIALIZED_SIZE
 
         if kwargs is None:
@@ -1826,8 +1827,6 @@ def given(
                     data = ConjectureData(BUFFER_SIZE, b"", provider=AtherisProvider)
                     # TODO proper init/setup interface
                     data.provider.buffer = buffer
-                    global custom_mutator_called
-                    custom_mutator_called = False
                 else:
                     data = ConjectureData.for_buffer(buffer)
                 try:

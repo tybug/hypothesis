@@ -8,13 +8,15 @@
 # v. 2.0. If a copy of the MPL was not distributed with this file, You can
 # obtain one at https://mozilla.org/MPL/2.0/.
 
-import json
+import inspect
 import math
+import random
 import time
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from random import Random
-from typing import Dict, List, Mapping, Tuple, TypeAlias
+from typing import Any, Callable, Dict, List, Mapping, TypedDict
 
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
@@ -22,7 +24,6 @@ from watchdog.observers import Observer
 from hypothesis.database import ir_from_bytes, ir_to_bytes
 from hypothesis.errors import StopTest
 from hypothesis.internal import floats as flt
-from hypothesis.internal.conjecture.engine import BUFFER_SIZE
 from hypothesis.internal.cache import LRUCache
 from hypothesis.internal.conjecture.data import (
     COLLECTION_DEFAULT_MAX_SIZE,
@@ -30,57 +31,59 @@ from hypothesis.internal.conjecture.data import (
     IRKWargsType,
     IRType,
     IRTypeName,
+    PrimitiveProvider,
     ir_to_buffer,
+    ir_value_equal,
     ir_value_permitted,
 )
-from hypothesis.internal.conjecture.engine import PrimitiveProvider
+from hypothesis.internal.conjecture.engine import BUFFER_SIZE
 from hypothesis.internal.conjecture.junkdrawer import clamp, replace_all
-from hypothesis.internal.conjecture.utils import _calc_p_continue
 from hypothesis.internal.floats import next_down, next_up, sign_aware_lte
 
 INT_SIZES = (8, 16, 32, 64, 128)
 INT_SIZES_WEIGHTS = (4.0, 8.0, 1.0, 1.0, 0.5)
 FLOAT_SIZES = (8, 16, 32, 64, 128, 1024)
 FLOAT_SIZES_WEIGHTS = (4.0, 8.0, 1.0, 1.0, 0.5, 0.5)
-Draw: TypeAlias = Tuple[IRTypeName, IRKWargsType, IRType]
+MAX_SERIALIZED_SIZE = BUFFER_SIZE
 # explicitly not thread-local so that the watchdog thread can access it
-data_to_draws_unsaved: Mapping[bytes, List[Draw]] = LRUCache(15_000, threadlocal=False)
+data_to_draws_unsaved: Mapping[bytes, List["Draw"]] = LRUCache(
+    15_000, threadlocal=False
+)
 # stores bounds for interesting / actual corpus data. unbounded
-data_to_draws: Dict[bytes, List[Draw]] = {}
+data_to_draws: Dict[bytes, List["Draw"]] = {}
 
-statistics = {
+
+class Statistics(TypedDict):
+    per_item_stats: list[Any]
+    num_calls: int
+    time_mutating: float
+
+
+statistics: Statistics = {
     "per_item_stats": [],
     "num_calls": 0,
     "time_mutating": 0,
 }
 track_per_item_stats = False
-custom_mutator_called = False
 print_stats_at = 25_000
-stats_printed = True  # set to True to disable printing entirely
 
 
-def _size(*, min_size, max_size, average_size, random):
-    p_continue = _calc_p_continue(average_size - min_size, max_size - min_size)
-    size = min_size
-    while random.random() < p_continue and size < max_size:
-        size += 1
-    return size
+def _geometric(*, min_value, average_value, max_value, random):
+    if average_value <= 1:
+        return min_value
 
+    range_size = max_value - min_value + 1
+    p = 1 / average_value
 
-def num_mutations(*, min_size, max_size, random):
-    # TODO tweak this distribution?
-    average_size = min(
-        max(
-            min_size + 3,
-            # for targets with a large amount of nodes, mutate 10% of them on average.
-            # otherwise we would mutate basically nothing for larger nodes
-            0.1 * (min_size + max_size),
-        ),
-        0.5 * (min_size + max_size),
-    )
-    return _size(
-        min_size=min_size, max_size=max_size, average_size=average_size, random=random
-    )
+    u = random.random()
+    x = math.log(1 - u * (1 - (1 - p) ** range_size)) / math.log(1 - p)
+    # This is a systematic underestimation of the average in my testing,
+    # especially if the bounds are close together.
+    #
+    # But, it *does* avoid the wrapped/folded distribution of hypothesis'
+    # _calculate_p_continue, which folds the prob density of > max_size into
+    # max_size itself. I think avoiding this is better for fuzzing.
+    return min_value + math.floor(x)
 
 
 def random_float_between(min_value, max_value, smallest_nonzero_magnitude, *, random):
@@ -346,10 +349,10 @@ def mutate_collection(value, *, min_size, max_size, draw_element, random):
     value = list(value)
 
     def draw_value(*, min_size, max_size, average_size):
-        size = _size(
-            min_size=min_size,
-            max_size=max_size,
-            average_size=average_size,
+        size = _geometric(
+            min_value=min_size,
+            average_value=average_size,
+            max_value=max_size,
             random=random,
         )
         return [draw_element() for _ in range(size)]
@@ -381,10 +384,10 @@ def mutate_collection(value, *, min_size, max_size, draw_element, random):
         # modifying the string (but they do for removing characters).
         # ~equivalently this could be an operation on the start point of
         # each interval.
-        num_splice = _size(
-            min_size=min(2, len(value)),
-            max_size=5,
-            average_size=min(2.5, len(value)),
+        num_splice = _geometric(
+            min_value=min(2, len(value)),
+            average_value=min(2.5, len(value)),
+            max_value=5,
             random=random,
         )
         splice_points = sorted(
@@ -535,36 +538,6 @@ def mutate_bytes(value, *, min_size, max_size, random):
     )
 
 
-class CorpusHandler(FileSystemEventHandler):
-    def on_created(self, event):
-        p = Path(event.src_path)
-        if p.is_dir or not p.exists():
-            return
-
-        data = p.read_bytes()
-        # this is potentially violated if libfuzzer waits longer than
-        # data_to_draws_unsaved.max_size inputs to try a new input. I don't
-        # fully understand the entropic scheduler but this seems extraordinarily
-        # unlikely bordering on impossible. But I've been bitten by impossible
-        # things before...
-        # assert data in data_to_draws_unsaved, (data, data_to_draws_unsaved)
-        if data not in data_to_draws_unsaved:
-            print(
-                "WARNING: saved corpus file not present in our time-limited "
-                f"cache.\ncache size: {len(data_to_draws_unsaved)}\ndata: {data}"
-                f"\ncache: {data_to_draws_unsaved}"
-            )
-            return
-        data_to_draws[data] = data_to_draws_unsaved[data]
-
-
-def watch_directory_for_corpus(p):
-    event_handler = CorpusHandler()
-    observer = Observer()
-    observer.schedule(event_handler, p, recursive=False)
-    observer.start()
-
-
 def _custom_mutator(data, buffer_size, seed):
     # seeding a random instance is actually not cheap. this random only controls
     # *mutations*, which we don't care about being deterministic (we want *replay*s
@@ -572,7 +545,7 @@ def _custom_mutator(data, buffer_size, seed):
     return custom_mutator(data, random=Random(), blackbox=True)
 
 
-def _get_draws_from_cache(buffer):
+def _get_draws_from_cache(buffer: bytes) -> List["Draw"] | None:
     try:
         return data_to_draws[buffer]
     except KeyError:
@@ -581,16 +554,206 @@ def _get_draws_from_cache(buffer):
         except KeyError:
             return None
 
-MAX_SERIALIZED_SIZE = BUFFER_SIZE
 
-def custom_mutator(data, *, random, blackbox):
+def mutation(*, p: float) -> Callable:
+    def accept(f):
+        f._hypothesis_fuzzing_is_mutation = True
+        f._hypothesis_fuzzing_p = p
+        return f
+
+    return accept
+
+
+@dataclass(slots=True)
+class Mutation:
+    p: int
+    func: Callable
+
+
+@dataclass(slots=True)
+class Draw:
+    ir_type: IRTypeName
+    kwargs: IRKWargsType
+    value: IRType
+    forced: IRType | None
+
+    def with_value(self, value: IRType) -> "Draw":
+        if self.forced is not None:
+            assert ir_value_equal(self.ir_type, value, self.forced)
+        return Draw(ir_type=self.ir_type, kwargs=self.kwargs, value=value, forced=self.forced)
+
+
+class Mutator:
+    DISABLED = object()
+    mutations: list[Mutation] = []
+
+    def __init__(self, *, total_cost: int, draws: list[Draw], random: Random):
+        self.total_cost = total_cost
+        # avoid mutating our saved draws list
+        self.draws = draws.copy()
+        self.random = random
+        # invariant: we never change the number of draws, only their values.
+        # if we stop doing this then we will need to make this list dynamically
+        # update whenever we change the underlying draws list.
+        self.malleable_indices = [
+            i for i, draw in enumerate(self.draws) if draw.forced is None
+        ]
+
+    def choose_mutation(self) -> Mutation:
+        # keep in mind that mutations can be disabled, in which case we want to
+        # remove their probability mass. this is why we reconstruct the p list
+        # each time.
+        return self.random.choices(
+            self.mutations, weights=[m.p for m in self.mutations]
+        )[0]
+
+    @mutation(p=0.2)
+    def copy_nodes(self, budget: int) -> int | object:
+        assert budget >= 1
+        if not self.malleable_indices:
+            return self.DISABLED
+
+        max_size = 12
+        average_size = 4
+        size = _geometric(
+            min_value=1,
+            average_value=min(average_size, budget),
+            max_value=min(max_size, budget),
+            random=self.random,
+        )
+        start = random.randint(0, len(self.draws) - size)
+
+        def try_find_target(size: int) -> int | None:
+            target_start = random.randint(0, len(self.draws) - size)
+            # dont copy a sequence with itself
+            if target_start == start:
+                return None
+
+            for i in range(size):
+                draw = self.draws[start + i]
+                draw_target = self.draws[target_start + i]
+                if draw.ir_type != draw_target.ir_type:
+                    return None
+                # ir type of both draws is equal
+                ir_type = draw_target.ir_type
+                if not ir_value_permitted(draw.value, ir_type, draw_target.kwargs):
+                    return None
+
+                # forced nodes must match exactly, meaning the target is forced
+                # iff the source is forced, and the forced values are equal.
+                v1 = draw.forced
+                v2 = draw_target.forced
+                if v1 is not None or v2 is not None:
+                    if v1 is None and v2 is not None:
+                        return None
+                    if v1 is not None and v2 is None:
+                        return None
+
+                    assert v1 is not None
+                    assert v2 is not None
+                    if not ir_value_equal(ir_type, v1, v2):
+                        return None
+
+            return target_start
+
+        # now try to find a target sequence with the right ir types and kwargs
+        target_start = None
+        for _ in range(4):
+            target_start = try_find_target(size)
+            if target_start is not None:
+                break
+
+        # couldn't find a copy target. we haven't changed anything, so the cost is 0.
+        if target_start is None:
+            return 0
+
+        for i in range(size):
+            value = self.draws[start + i].value
+            self.draws[target_start + i] = self.draws[target_start + i].with_value(
+                value
+            )
+
+        # we changed `size` nodes, which is therefore our cost.
+        return size
+
+    @mutation(p=1)
+    def mutate_node(self, budget: int) -> int | object:
+        assert budget >= 1
+        if not self.malleable_indices:
+            return self.DISABLED
+
+        i = self.random.choice(self.malleable_indices)
+        draw = self.draws[i]
+        ir_type = draw.ir_type
+        kwargs: Any = draw.kwargs
+
+        if ir_type == "integer":
+            value = mutate_integer(
+                draw.value,
+                min_value=kwargs["min_value"],
+                max_value=kwargs["max_value"],
+                random=random,
+            )
+        elif ir_type == "boolean":
+            value = mutate_boolean(draw.value, p=kwargs["p"])
+        elif ir_type == "bytes":
+            value = mutate_bytes(
+                draw.value,
+                min_size=kwargs["min_size"],
+                max_size=kwargs["max_size"],
+                random=random,
+            )
+        elif ir_type == "string":
+            value = mutate_string(
+                draw.value,
+                min_size=kwargs["min_size"],
+                max_size=kwargs["max_size"],
+                intervals=kwargs["intervals"],
+                random=random,
+            )
+        elif ir_type == "float":
+            value = mutate_float(
+                draw.value,
+                min_value=kwargs["min_value"],
+                max_value=kwargs["max_value"],
+                allow_nan=kwargs["allow_nan"],
+                smallest_nonzero_magnitude=kwargs["smallest_nonzero_magnitude"],
+                random=random,
+            )
+        else:
+            raise Exception(f"unhandled case ({ir_type=})")
+
+        # print(f"{self.draws[i].value} |->| {value}")
+        self.draws[i] = self.draws[i].with_value(value)
+        return 1
+
+    def mutate(self) -> list[Draw]:
+        total_cost = 0
+        while total_cost < self.total_cost and self.mutations:
+            mutation = self.choose_mutation()
+            cost = mutation.func(self, budget=self.total_cost - total_cost)
+            if cost is self.DISABLED:
+                self.mutations.remove(mutation)
+                continue
+            total_cost += cost
+
+        return self.draws
+
+
+# inspection is expensive, run only once outside instead of on Mutator init.
+# also precalculate cumulative probs for mutation choices
+for _name, method in inspect.getmembers(Mutator, predicate=inspect.isfunction):
+    if not getattr(method, "_hypothesis_fuzzing_is_mutation", False):
+        continue
+    Mutator.mutations.append(Mutation(p=method._hypothesis_fuzzing_p, func=method))
+
+
+def custom_mutator(data: bytes, *, random: Random, blackbox: bool) -> bytes:
     t_start = time.time()
     statistics["num_calls"] += 1
-    # custom_mutator should be called by atheris exactly once per test case.
-    global custom_mutator_called, stats_printed
-    # this assert actually fired when fuzzing hypothesis_jsonschema? not sure how yet.
-    # assert not custom_mutator_called
-    custom_mutator_called = True
+
+    if statistics["num_calls"] % 1000 == 0:
+        print(statistics["time_mutating"])
 
     stats = {}
 
@@ -620,121 +783,61 @@ def custom_mutator(data, *, random, blackbox):
     if track_per_item_stats:
         stats["mode"] = "mutate"
 
-    # possibly 0 draws got made, in which case use 0 mutations.
-    num_mutations_ = num_mutations(
-        min_size=min(1, len(draws)), max_size=len(draws), random=random
+    malleable_draws = [
+        i for i, draw in enumerate(draws) if draw.forced is None
+    ]
+    # manually specify distributions for small mutations, where our geometric
+    # distribution estimation can be badly off skew. We can also more faithfully
+    # specify the desired distribution when working with small integers where it
+    # matters most.
+    #
+    # for instance, with 2 nodes, geom probably says something like mutate both
+    # with p=0.25. but we'd really like it to be lower than that.
+    max_cost = len(malleable_draws)
+    average_cost = {
+        0: 0,
+        1: 1,
+        2: 1.6,
+        3: 1.9,
+        4: 2.2,
+        5: 2.4,
+        6: 2.6,
+        7: 2.7,
+        8: 2.8,
+        9: 3,
+        10: 3.2,
+        11: 3.4,
+        12: 3.6,
+    }.get(max_cost)
+    if average_cost is None:
+        assert max_cost > 12
+        # add 0.2 average size per additional draw
+        average_cost = 3.6 + (max_cost - 12) * 0.2
+        # ...up to a cap of 20% average of the nodes for large draws
+        if max_cost > 50:
+            average_cost = min(average_cost, max_cost * 0.2)
+
+    total_cost = _geometric(
+        min_value=0 if max_cost == 0 else 1,
+        average_value=average_cost,
+        max_value=max_cost,
+        random=random,
     )
-    mutations = random.sample(range(len(draws)), num_mutations_)
-    if track_per_item_stats:
-        stats["num_mutations"] = len(mutations)
-        stats["before"] = [_make_serializable(v) for (_, _, v) in draws]
-        stats["mutations"] = []
-        after = [_make_serializable(v) for (_, _, v) in draws]
 
-    def _get_splice_choices(index, ir_type, kwargs):
-        splices = []
-        for i, (splice_ir_type, _splice_kwargs, value) in enumerate(draws):
-            # don't splice an ir node with itself
-            if index == i:
-                continue
-            if ir_type != splice_ir_type:
-                continue
-            if not ir_value_permitted(value, ir_type, kwargs):
-                continue
-            splices.append(value)
-        return splices
-
-    replacements = []
-    # TODO with probability 0.2, do only splices (average of 2 maybe?). or sometimes
-    # try splice *ranges* - ranges of ir the same ir types
-    for i in mutations:
-        (ir_type, kwargs, value) = draws[i]
-        # TODO reconsider forced value handling - re-sample from num mutations?
-        # or sample by construction to avoid sampling forced nodes?
-        if kwargs["forced"] is not None:
-            continue
-
-        extra_item_stats = {}
-        mutation_type = "normal"
-        # 10% chance for a mutation to be a splice (copy) of an existing node of
-        # the same type instead
-        if random.random() < 0.1 and (
-            splice_choices := _get_splice_choices(i, ir_type, kwargs)
-        ):
-            mutation_type = "splice"
-            forced = random.choice(splice_choices)
-            if track_per_item_stats:
-                extra_item_stats["splice_choices"] = [
-                    _make_serializable(v) for v in splice_choices
-                ]
-        elif ir_type == "integer":
-            forced = mutate_integer(
-                value,
-                min_value=kwargs["min_value"],
-                max_value=kwargs["max_value"],
-                random=random,
-            )
-        elif ir_type == "boolean":
-            forced = mutate_boolean(value, p=kwargs["p"])
-        elif ir_type == "bytes":
-            forced = mutate_bytes(
-                value,
-                min_size=kwargs["min_size"],
-                max_size=kwargs["max_size"],
-                random=random,
-            )
-        elif ir_type == "string":
-            forced = mutate_string(
-                value,
-                min_size=kwargs["min_size"],
-                max_size=kwargs["max_size"],
-                intervals=kwargs["intervals"],
-                random=random,
-            )
-        elif ir_type == "float":
-            forced = mutate_float(
-                value,
-                min_value=kwargs["min_value"],
-                max_value=kwargs["max_value"],
-                allow_nan=kwargs["allow_nan"],
-                smallest_nonzero_magnitude=kwargs["smallest_nonzero_magnitude"],
-                random=random,
-            )
-        else:
-            raise Exception(f"unhandled case ({ir_type=})")
-
-        if track_per_item_stats:
-            after[i] = _make_serializable(forced)
-            stats["mutations"].append(
-                {
-                    "ir_type": ir_type,
-                    "before": _make_serializable(value),
-                    "after": _make_serializable(forced),
-                    "mutation_type": mutation_type,
-                    **extra_item_stats,
-                }
-            )
-        replacements.append((i, i + 1, [forced]))
-
-    replacements = sorted(replacements, key=lambda v: v[0])
-    ir = replace_all([v for (_, _, v) in draws], replacements)
-    data = ir_to_bytes(ir)
-    data = data[:MAX_SERIALIZED_SIZE]
-    assert len(data) <= MAX_SERIALIZED_SIZE
+    mutated_draws = Mutator(total_cost=total_cost, draws=draws, random=random).mutate()
+    serialized_ir = ir_to_bytes([draw.value for draw in mutated_draws])
+    serialized_ir = serialized_ir[:MAX_SERIALIZED_SIZE]
+    assert len(serialized_ir) <= MAX_SERIALIZED_SIZE
 
     statistics["time_mutating"] += time.time() - t_start
     if track_per_item_stats:
-        stats["after"] = after
+        stats["after"] = [_make_serializable(draw.value) for draw in mutated_draws]
         statistics["per_item_stats"].append(stats)
-    if statistics["num_calls"] > print_stats_at and not stats_printed:
-        print("-- run statistics --")
-        print(json.dumps(statistics))
-        stats_printed = True
-    return data
+    return serialized_ir
 
 
 class AtherisProvider(PrimitiveProvider):
-    def draws_prefix(self, buffer):
+    def _draws_prefix(self, buffer):
         def ir_type(typ):
             return {
                 str: "string",
@@ -750,49 +853,63 @@ class AtherisProvider(PrimitiveProvider):
             return None
         return [(ir_type(type(v)), v) for v in values]
 
-    def random_value(self, ir_type, kwargs):
+    def random_value(self, ir_type: IRTypeName, kwargs: IRKWargsType) -> IRType:
         try:
             (value, buf) = ir_to_buffer(ir_type, kwargs, random=self.random)
         except StopTest:
             # possible for a fresh data to overrun if we get unlucky with e.g.
             # integer probes.
+            assert self._cd is not None
             self._cd.mark_overrun()
         return value
 
-    def _value(self, ir_type, kwargs):
-        kwargs = {k: v for k, v in kwargs.items() if k not in {"forced", "fake_forced"}}
+    def _aligned(self, requested_ir_type, requested_kwargs):
+        (ir_type, value) = self.draws_prefix[self.draws_index]
+        return requested_ir_type == ir_type and ir_value_permitted(
+            value, ir_type, requested_kwargs
+        )
+
+    def _value(self, ir_type: IRTypeName, kwargs: Any) -> IRType:
         if self.draws_prefix is None:
             # this buffer wasn't in our cache, do total random generation
             return self.random_value(ir_type, kwargs)
-
         if self.draws_index >= len(self.draws_prefix):
             return self.random_value(ir_type, kwargs)
 
-        (ir_type_, value_) = self.draws_prefix[self.draws_index]
-        if ir_type_ != ir_type or not ir_value_permitted(value_, ir_type, kwargs):
-            return self.random_value(ir_type, kwargs)
-        return value_
+        if not self._aligned(ir_type, kwargs):
+            # try realigning: pop draws until we realign or run out. if we realign,
+            # return that index. if we don't, return random.
+            while self.draws_index < len(self.draws_prefix) - 1:
+                self.draws_index += 1
+                if self._aligned(ir_type, kwargs):
+                    break
+            else:
+                return self.random_value(ir_type, kwargs)
 
-    def draw_value(self, ir_type, kwargs):
-        value = (
-            self._value(ir_type, kwargs)
-            if kwargs["forced"] is None
-            else kwargs["forced"]
+        (_, value) = self.draws_prefix[self.draws_index]
+        return value
+
+    def draw_value(self, ir_type: IRTypeName, kwargs: Any) -> IRType:
+        forced = kwargs.pop("forced")
+        kwargs.pop("fake_forced")
+        value = self._value(ir_type, kwargs) if forced is None else forced
+        assert (
+            type(value)
+            is {
+                "string": str,
+                "float": float,
+                "integer": int,
+                "boolean": bool,
+                "bytes": bytes,
+            }[ir_type]
         )
-        assert type(value) is {
-            "string": str,
-            "float": float,
-            "integer": int,
-            "boolean": bool,
-            "bytes": bytes,
-        }[ir_type]
 
         self.draws_index += 1
         self.serialized_size += len(ir_to_bytes([value]))
         if self.serialized_size > MAX_SERIALIZED_SIZE:
+            assert self._cd is not None
             self._cd.mark_overrun()
-        draw = (ir_type, kwargs, value)
-        self.draws.append(draw)
+        self.draws.append(Draw(ir_type=ir_type, kwargs=kwargs, value=value, forced=forced))
         return value
 
     def draw_boolean(self, **kwargs):
@@ -812,9 +929,9 @@ class AtherisProvider(PrimitiveProvider):
 
     @contextmanager
     def per_test_case_context_manager(self):
-        self.draws_prefix = self.draws_prefix(self.buffer)
-        self.draws_index = 0
-        self.serialized_size = 0
+        self.draws_prefix = self._draws_prefix(self.buffer)
+        self.draws_index: int = 0
+        self.serialized_size: int = 0
         self.draws: List[Draw] = []
         # deterministic generation relative to the buffer, for replaying failures.
         self.random = Random(self.buffer)
@@ -824,3 +941,39 @@ class AtherisProvider(PrimitiveProvider):
         yield
 
         data_to_draws_unsaved[self.buffer] = self.draws
+
+
+class CorpusHandler(FileSystemEventHandler):
+    def on_created(self, event):
+        p = Path(event.src_path)
+        if p.is_dir or not p.exists():
+            return
+
+        data = p.read_bytes()
+        # this is potentially violated if libfuzzer waits longer than
+        # data_to_draws_unsaved.max_size inputs to try a new input. I don't
+        # fully understand the entropic scheduler but this seems extraordinarily
+        # unlikely bordering on impossible. But I've been bitten by impossible
+        # things before...
+        # assert data in data_to_draws_unsaved, (data, data_to_draws_unsaved)
+        if data not in data_to_draws_unsaved:
+            print(
+                "WARNING: saved corpus file not present in our time-limited "
+                f"cache.\ncache size: {len(data_to_draws_unsaved)}\ndata: {data}"
+                f"\ncache: {data_to_draws_unsaved}"
+            )
+            return
+        data_to_draws[data] = data_to_draws_unsaved[data]
+
+
+def watch_directory_for_corpus(p: str | Path) -> None:
+    event_handler = CorpusHandler()
+    observer = Observer()
+    observer.schedule(event_handler, str(p), recursive=False)
+    observer.start()
+
+
+# NEXT:
+# * track statistics for the "lineage" of mutations. how many seeds are saved, how often are they mutated against?
+# * nested call test case: if a == 1 if b == 2 if c == 3 ... to ensure we aren't doing anything stupid with seed lineage or caching
+# * with some probability, copy a node + mutate the copy around its value? allows things like copying n into n - 1 elsewhere

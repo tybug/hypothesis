@@ -19,7 +19,13 @@ import pytest
 from hypothesis import assume, example, given, settings, strategies as st
 from hypothesis.core import BUFFER_SIZE
 from hypothesis.database import ir_to_bytes
-from hypothesis.fuzzing import AtherisProvider, custom_mutator, mutate_string
+from hypothesis.fuzzing import (
+    AtherisProvider,
+    Draw,
+    Mutator,
+    custom_mutator,
+    mutate_string,
+)
 from hypothesis.internal.conjecture.data import ConjectureData, ir_value_equal
 from hypothesis.internal.floats import next_down, next_up
 from hypothesis.internal.intervalsets import IntervalSet
@@ -27,7 +33,7 @@ from hypothesis.internal.reflection import get_pretty_function_description
 
 from tests.common.strategies import intervals
 from tests.common.utils import flaky
-from tests.conjecture.common import ir_types_and_kwargs
+from tests.conjecture.common import draw_value, ir_types_and_kwargs
 
 MARKER = uuid.uuid4().hex
 
@@ -47,6 +53,13 @@ def serialized_ir(draw):
         )
     )
     return ir_to_bytes(values)
+
+
+@st.composite
+def draws(draw):
+    ir_type, kwargs = draw(ir_types_and_kwargs())
+    value = draw_value(ir_type, kwargs)
+    return Draw(ir_type=ir_type, kwargs=kwargs, value=value, forced=None)
 
 
 def fuzz(f, *, start, mode, max_examples):
@@ -113,6 +126,21 @@ def test_runs_with_various_kwargs(start, strategy):
     @given(strategy)
     def f(x):
         pass
+
+    fuzz(f, start=start, mode="atheris", max_examples=100)
+
+
+# I'm pretty nervous that we'll violate a forced invariant and return an unsound value.
+# this is a start at sanity checking that
+@given(st.data(), serialized_ir() | st.binary())
+@settings(max_examples=20, deadline=None)
+def test_respects_list_size(data, start):
+    min_size = data.draw(st.integers(0, 10))
+    max_size = data.draw(st.integers(min_size, min_size + 10))
+
+    @given(st.lists(st.integers(), min_size=min_size, max_size=max_size))
+    def f(l):
+        assert min_size <= len(l) <= max_size
 
     fuzz(f, start=start, mode="atheris", max_examples=100)
 
@@ -315,3 +343,81 @@ def test_replaying_buffer_is_deterministic(buffer, draws):
             v1 = getattr(data1, f"draw_{ir_type}")(**kwargs)
             v2 = getattr(data2, f"draw_{ir_type}")(**kwargs)
             assert ir_value_equal(ir_type, v1, v2)
+
+
+@pytest.mark.parametrize(
+    "strat1, strat2, start, eq",
+    [
+        (
+            s := [
+                st.integers(),
+                st.integers(min_value=1, max_value=2),
+                st.lists(st.booleans()),
+            ],
+            s,
+            # s1 = (42**3, 2, [False])
+            # s2 = (100, 1, [])
+            [42**3, 2, True, False, False] + [100, 1, False],
+            lambda v1, v2: v1 == v2,
+        ),
+        (
+            [st.integers(), st.binary()] + [st.booleans()],
+            [st.integers(), st.binary()] + [st.floats()],
+            [111111, b"aaaaaa", True] + [222222, b"bbbbbb", 0.1],
+            lambda v1, v2: v1[0:2] == v2[0:2],
+        ),
+        (
+            [st.booleans()] + [st.integers(), st.binary()],
+            [st.floats()] + [st.integers(), st.binary()],
+            [True, 111111, b"aaaaaa"] + [0.1, 222222, b"bbbbbb"],
+            lambda v1, v2: v1[1:3] == v2[1:3],
+        ),
+        (
+            [st.booleans()] + [st.integers(), st.binary()],
+            [st.integers(), st.binary()] + [st.floats()],
+            [True, 111111, b"aaaaaa"] + [222222, b"bbbbbb", 0.1],
+            lambda v1, v2: v1[1:3] == v2[0:2],
+        ),
+        (
+            [st.booleans(), st.integers(), st.binary(), st.floats()],
+            [st.floats(), st.integers(), st.binary(), st.booleans()],
+            [True, 111111, b"aaaaaa", 0.1] + [0.1, 222222, b"bbbbbb", True],
+            lambda v1, v2: v1[1:3] == v2[1:3],
+        ),
+    ],
+)
+def test_can_copy_sequences_of_nodes(strat1, strat2, start, eq):
+    s1 = st.composite(lambda draw: [draw(s) for s in strat1])
+    s2 = st.composite(lambda draw: [draw(s) for s in strat2])
+
+    print(strat1, strat2, start, eq)
+
+    @settings(database=None)
+    @given(s1(), s2())
+    def f(v1, v2):
+        assert not eq(v1, v2), MARKER
+
+    with pytest.raises(AssertionError, match=MARKER):
+        print("mode: atheris")
+        fuzz(f, start=start, mode="atheris", max_examples=200)
+
+    print("mode: baseline")
+    fuzz(f, start=start, mode="baseline", max_examples=1000)
+
+
+@given(st.lists(draws(), min_size=1), st.integers(1, 100))
+@settings(max_examples=200)
+def test_mutator_with_forced_nodes(draws, total_cost):
+    print(f"draws: {draws}")
+    # I would like to make a random number of nodes forced and then check that their
+    # value didn't change, but I don't know how to track a specific node throughout
+    # all the mutations to its final destination.
+    draw = r.choice(draws)
+    forced_value = draw.value
+    draw.forced = forced_value
+
+    mutated_draws = Mutator(total_cost=total_cost, draws=draws, random=r).mutate()
+    for draw in mutated_draws:
+        if draw.forced is None:
+            continue
+        assert ir_value_equal(draw.ir_type, draw.value, forced_value)
