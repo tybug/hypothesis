@@ -751,6 +751,7 @@ for _name, method in inspect.getmembers(Mutator, predicate=inspect.isfunction):
 
 
 def custom_mutator(data: bytes, *, random: Random, blackbox: bool) -> bytes:
+    print("HYPOTHESIS MUTATING FROM", data)
     t_start = time.time()
     statistics["num_calls"] += 1
 
@@ -763,7 +764,9 @@ def custom_mutator(data: bytes, *, random: Random, blackbox: bool) -> bytes:
         stats["mode"] = "fresh"
         # this is only used as the random seed unless it coincidentally is a valid
         # ir bytestream. so we don't need BUFFER_SIZE randomness here.
-        return random.randbytes(10)
+        v = random.randbytes(10)
+        print("HYPOTHESIS FRESH", v)
+        return v
 
     # blackbox exploratory/warmup phase for the first 1k inputs
     # TODO we probably want an adaptive tradeoff here, "blackbox until n consecutive uninteresting inputs"
@@ -833,6 +836,7 @@ def custom_mutator(data: bytes, *, random: Random, blackbox: bool) -> bytes:
     if track_per_item_stats:
         stats["after"] = [_make_serializable(draw.value) for draw in mutated_draws]
         statistics["per_item_stats"].append(stats)
+    print("HYPOTHESIS MUTATED TO", serialized_ir)
     return serialized_ir
 
 
@@ -912,6 +916,7 @@ class AtherisProvider(PrimitiveProvider):
         self.draws.append(
             Draw(ir_type=ir_type, kwargs=kwargs, value=value, forced=forced)
         )
+        print(f"HYPOTHESIS ATHERISPROVIDER DRAW_VALUE {value} (from {ir_type=}, {kwargs=})")
         return value
 
     def draw_boolean(self, **kwargs):
@@ -932,6 +937,8 @@ class AtherisProvider(PrimitiveProvider):
     @contextmanager
     def per_test_case_context_manager(self):
         self.draws_prefix = self._draws_prefix(self.buffer)
+        print("HYPOTHESIS ATHERISPROVIDER DATA", self.buffer)
+        print("HYPOTHESIS ATHERISPROVIDER DRAWS_PREFIX", self.draws_prefix)
         self.draws_index: int = 0
         self.serialized_size: int = 0
         self.draws: List[Draw] = []
@@ -978,3 +985,5 @@ def watch_directory_for_corpus(p: str | Path) -> None:
 # NEXT:
 # * track statistics for the "lineage" of mutations. how many seeds are saved, how often are they mutated against?
 # * nested call test case: if a == 1 if b == 2 if c == 3 ... to ensure we aren't doing anything stupid with seed lineage or caching
+
+# TODO check if our coverage calculation is really only calculating the current lib
