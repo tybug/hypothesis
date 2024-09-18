@@ -421,3 +421,14 @@ def test_mutator_with_forced_nodes(draws, total_cost):
         if draw.forced is None:
             continue
         assert ir_value_equal(draw.ir_type, draw.value, forced_value)
+
+
+@given(st.lists(draws()))
+def test_aligned_provider(draws):
+    data = ConjectureData(BUFFER_SIZE, b"", provider=AtherisProvider)
+    data.provider.buffer = ir_to_bytes([d.value for d in draws])
+
+    with data.provider.per_test_case_context_manager():
+        for draw in draws:
+            v = getattr(data, f"draw_{draw.ir_type}")(**draw.kwargs)
+            assert ir_value_equal(draw.ir_type, v, draw.value)

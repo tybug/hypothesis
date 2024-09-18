@@ -580,7 +580,9 @@ class Draw:
     def with_value(self, value: IRType) -> "Draw":
         if self.forced is not None:
             assert ir_value_equal(self.ir_type, value, self.forced)
-        return Draw(ir_type=self.ir_type, kwargs=self.kwargs, value=value, forced=self.forced)
+        return Draw(
+            ir_type=self.ir_type, kwargs=self.kwargs, value=value, forced=self.forced
+        )
 
 
 class Mutator:
@@ -783,9 +785,7 @@ def custom_mutator(data: bytes, *, random: Random, blackbox: bool) -> bytes:
     if track_per_item_stats:
         stats["mode"] = "mutate"
 
-    malleable_draws = [
-        i for i, draw in enumerate(draws) if draw.forced is None
-    ]
+    malleable_draws = [i for i, draw in enumerate(draws) if draw.forced is None]
     # manually specify distributions for small mutations, where our geometric
     # distribution estimation can be badly off skew. We can also more faithfully
     # specify the desired distribution when working with small integers where it
@@ -866,7 +866,7 @@ class AtherisProvider(PrimitiveProvider):
     def _aligned(self, requested_ir_type, requested_kwargs):
         (ir_type, value) = self.draws_prefix[self.draws_index]
         return requested_ir_type == ir_type and ir_value_permitted(
-            value, ir_type, requested_kwargs
+            value, requested_ir_type, requested_kwargs
         )
 
     def _value(self, ir_type: IRTypeName, kwargs: Any) -> IRType:
@@ -878,7 +878,7 @@ class AtherisProvider(PrimitiveProvider):
 
         if not self._aligned(ir_type, kwargs):
             # try realigning: pop draws until we realign or run out. if we realign,
-            # return that index. if we don't, return random.
+            # use that index. if we don't, return random.
             while self.draws_index < len(self.draws_prefix) - 1:
                 self.draws_index += 1
                 if self._aligned(ir_type, kwargs):
@@ -909,7 +909,9 @@ class AtherisProvider(PrimitiveProvider):
         if self.serialized_size > MAX_SERIALIZED_SIZE:
             assert self._cd is not None
             self._cd.mark_overrun()
-        self.draws.append(Draw(ir_type=ir_type, kwargs=kwargs, value=value, forced=forced))
+        self.draws.append(
+            Draw(ir_type=ir_type, kwargs=kwargs, value=value, forced=forced)
+        )
         return value
 
     def draw_boolean(self, **kwargs):
@@ -976,4 +978,3 @@ def watch_directory_for_corpus(p: str | Path) -> None:
 # NEXT:
 # * track statistics for the "lineage" of mutations. how many seeds are saved, how often are they mutated against?
 # * nested call test case: if a == 1 if b == 2 if c == 3 ... to ensure we aren't doing anything stupid with seed lineage or caching
-# * with some probability, copy a node + mutate the copy around its value? allows things like copying n into n - 1 elsewhere
