@@ -1462,7 +1462,7 @@ class HypothesisHandle:
         # structure atheris expects. not doing so throws off arg order interpretation.
         argv = ["__main__"]
         if corpus_dir is not None:
-            argv += [str(corpus_dir)]
+            pass
         elif self._settings.database is not None:
             corpus_dir = storage_directory(
                 "corpus", _hash(function_digest(self.inner_test))
