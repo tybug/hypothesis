@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from random import Random
 from typing import Any, Callable, Dict, List, Mapping, TypedDict
+import abc
 
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
@@ -37,7 +38,7 @@ from hypothesis.internal.conjecture.data import (
     ir_value_permitted,
 )
 from hypothesis.internal.conjecture.engine import BUFFER_SIZE
-from hypothesis.internal.conjecture.junkdrawer import clamp, replace_all
+from hypothesis.internal.conjecture.junkdrawer import clamp
 from hypothesis.internal.floats import next_down, next_up, sign_aware_lte
 
 INT_SIZES = (8, 16, 32, 64, 128)
@@ -68,12 +69,14 @@ track_per_item_stats = False
 print_stats_at = 25_000
 
 
-def _geometric(*, min_value, average_value, max_value, random):
-    if average_value <= 1:
-        return min_value
+def _geometric(*, min, average, max, random):
+    assert min <= average <= max
+    assert min >= 0
+    if average <= 1:
+        return random.randint(0, 1)
 
-    range_size = max_value - min_value + 1
-    p = 1 / average_value
+    range_size = max - min + 1
+    p = 1 / average
 
     u = random.random()
     x = math.log(1 - u * (1 - (1 - p) ** range_size)) / math.log(1 - p)
@@ -83,7 +86,7 @@ def _geometric(*, min_value, average_value, max_value, random):
     # But, it *does* avoid the wrapped/folded distribution of hypothesis'
     # _calculate_p_continue, which folds the prob density of > max_size into
     # max_size itself. I think avoiding this is better for fuzzing.
-    return min_value + math.floor(x)
+    return min + math.floor(x)
 
 
 def random_float_between(min_value, max_value, smallest_nonzero_magnitude, *, random):
@@ -342,122 +345,6 @@ def _mutate_float(
     return forced
 
 
-def mutate_collection(value, *, min_size, max_size, draw_element, random):
-    if max_size is None:
-        max_size = COLLECTION_DEFAULT_MAX_SIZE
-
-    value = list(value)
-
-    def draw_value(*, min_size, max_size, average_size):
-        size = _geometric(
-            min_value=min_size,
-            average_value=average_size,
-            max_value=max_size,
-            random=random,
-        )
-        return [draw_element() for _ in range(size)]
-
-    # totally random with probability 0.1, more intelligent mutation
-    # otherwise. This is me being scared of not being able to get out of small
-    # size collections like the empty string, because there's nothing to mutate.
-    if random.random() < 0.1:
-        # copied from HypothesisProvider.draw_string
-        average_size = min(
-            max(min_size * 2, min_size + 5),
-            0.5 * (min_size + max_size),
-        )
-        forced = draw_value(
-            min_size=min_size, max_size=max_size, average_size=average_size
-        )
-    else:
-        # pick n splice points. for each [n1, n2] interval, do one of:
-        # * delete it
-        # * swap it with another interval
-        # * replace it with another interval
-        # * replace it with a new random string
-        #
-        # for each splice point n1:
-        # * with some ~low probability, insert a new random string at n1
-        #
-        # the latter is not covered by the interval operators as the interval
-        # operators have no way to introduce new characters without otherwise
-        # modifying the string (but they do for removing characters).
-        # ~equivalently this could be an operation on the start point of
-        # each interval.
-        num_splice = _geometric(
-            min_value=min(2, len(value)),
-            average_value=min(2.5, len(value)),
-            max_value=5,
-            random=random,
-        )
-        splice_points = sorted(
-            {random.randint(0, len(value)) for _ in range(num_splice)}
-        )
-        splice_intervals = list(zip(splice_points, splice_points[1:]))
-        # (n1, n2): new_string. use a dict to allow overwriting operators
-        # for the same splice interval lest size changes get the better of us.
-        replacements = {}
-        for n1, n2 in splice_intervals:
-            r = random.random()
-            if r < 0.25:
-                # case: delete this interval
-                replacements[(n1, n2)] = []
-            elif r < 0.5 and len(splice_intervals) > 1:
-                # case: swap with another interval
-                (a1, a2) = random.choice(splice_intervals)
-                replacements[(n1, n2)] = value[a1:a2]
-                replacements[(a1, a2)] = value[n1:n2]
-            elif r < 0.75 and len(splice_intervals) > 1:
-                # case: replace with another interval
-                (a1, a2) = random.choice(splice_intervals)
-                replacements[(n1, n2)] = value[a1:a2]
-            else:
-                # case: replace with a new random string of ~similar size
-                replacements[(n1, n2)] = draw_value(
-                    min_size=0, average_size=n2 - n1, max_size=(n2 - n1) * 2
-                )
-
-        replacements = [(n1, n2, value) for (n1, n2), value in replacements.items()]
-        forced = replace_all(value, replacements)
-        for n in splice_points:
-            if random.random() < 0.1:
-                # case: insert a new random value at point n
-                # TODO I think this misses inserting at the very end, see len(forced) + 1
-                # case in `while len(forced) < min_size`
-                forced = (
-                    forced[:n]
-                    + draw_value(min_size=0, average_size=2, max_size=6)
-                    + forced[n:]
-                )
-
-        # if none of this mutation has had any effect, add or delete something
-        # random for certain. this can happen for rather small strings where we don't
-        # have many/any splice_intervals.
-        if forced == value:
-            n = random.randint(0, len(value))
-            if random.random() < 0.5 and len(value) > 0:
-                # remove everything up to n, or after n
-                forced = forced[n:] if random.random() < 0.5 else forced[:n]
-            else:
-                # add a string at n
-                forced = (
-                    forced[:n]
-                    + draw_value(min_size=0, average_size=2, max_size=4)
-                    + forced[n:]
-                )
-
-        while len(forced) < min_size:
-            add_idx = random.choice(list(range(len(forced) + 1)))
-            forced = forced[:add_idx] + [draw_element()] + forced[add_idx:]
-        while len(forced) > max_size:
-            # remove random indices to bring us back to max_size
-            remove_idx = random.choice(list(range(len(forced))))
-            forced = forced[:remove_idx] + forced[remove_idx + 1 :]
-
-    assert min_size <= len(forced) <= max_size
-    return forced
-
-
 # upweight certain ascii chars. copied from libfuzzer with some
 # modifications (e.g. drop 0 and 255).
 # https://github.com/llvm/llvm-project/blob/0f56ba13bff7ab72bfafcf7c5cf
@@ -506,15 +393,17 @@ def mutate_string(value, *, min_size, max_size, intervals, random):
             assert False
         return chr(intervals[n])
 
-    return "".join(
-        mutate_collection(
-            value,
+    x = "".join(
+        CollectionMutator(
+            value=list(value),
             min_size=min_size,
             max_size=max_size,
             draw_element=draw_element,
             random=random,
-        )
+        ).mutate()
     )
+    # print(f"{value} |->| {x}")
+    return x
 
 
 def mutate_boolean(value, *, p):
@@ -528,13 +417,13 @@ def mutate_bytes(value, *, min_size, max_size, random):
         return random.randint(0, 255)
 
     return bytes(
-        mutate_collection(
-            value,
+        CollectionMutator(
+            value=list(value),
             min_size=min_size,
             max_size=max_size,
             draw_element=draw_element,
             random=random,
-        )
+        ).mutate()
     )
 
 
@@ -587,19 +476,22 @@ class Draw:
 
 class Mutator:
     DISABLED = object()
-    mutations: list[Mutation] = []
 
-    def __init__(self, *, total_cost: int, draws: list[Draw], random: Random):
+    def __init__(self, *, total_cost: int, random: Random):
         self.total_cost = total_cost
-        # avoid mutating our saved draws list
-        self.draws = draws.copy()
         self.random = random
-        # invariant: we never change the number of draws, only their values.
-        # if we stop doing this then we will need to make this list dynamically
-        # update whenever we change the underlying draws list.
-        self.malleable_indices = [
-            i for i, draw in enumerate(self.draws) if draw.forced is None
-        ]
+
+    def mutate(self):
+        total_cost = 0
+        while total_cost < self.total_cost and self.mutations:
+            mutation = self.choose_mutation()
+            cost = mutation.func(self, budget=self.total_cost - total_cost)
+            if cost is self.DISABLED:
+                self.mutations.remove(mutation)
+                continue
+            total_cost += cost
+
+        return self.finish()
 
     def choose_mutation(self) -> Mutation:
         # keep in mind that mutations can be disabled, in which case we want to
@@ -608,6 +500,25 @@ class Mutator:
         return self.random.choices(
             self.mutations, weights=[m.p for m in self.mutations]
         )[0]
+
+    @abc.abstractmethod
+    def finish(self):
+        pass
+
+
+class NodeMutator(Mutator):
+    mutations: list[Mutation] = []
+
+    def __init__(self, *, total_cost: int, random: Random, draws: list[Draw]):
+        super().__init__(total_cost=total_cost, random=random)
+        # avoid mutating our saved draws list
+        self.draws = draws.copy()
+        # invariant: we never change the number of draws, only their values.
+        # if we stop doing this then we will need to make this list dynamically
+        # update whenever we change the underlying draws list.
+        self.malleable_indices = [
+            i for i, draw in enumerate(self.draws) if draw.forced is None
+        ]
 
     @mutation(p=0.2)
     def copy_nodes(self, budget: int) -> int | object:
@@ -618,9 +529,9 @@ class Mutator:
         max_size = 12
         average_size = 4
         size = _geometric(
-            min_value=1,
-            average_value=min(average_size, budget),
-            max_value=min(max_size, budget),
+            min=1,
+            average=min(average_size, budget),
+            max=min(max_size, budget),
             random=self.random,
         )
         start = random.randint(0, len(self.draws) - size)
@@ -729,29 +640,149 @@ class Mutator:
         self.draws[i] = self.draws[i].with_value(value)
         return 1
 
-    def mutate(self) -> list[Draw]:
-        total_cost = 0
-        while total_cost < self.total_cost and self.mutations:
-            mutation = self.choose_mutation()
-            cost = mutation.func(self, budget=self.total_cost - total_cost)
-            if cost is self.DISABLED:
-                self.mutations.remove(mutation)
-                continue
-            total_cost += cost
-
+    def finish(self):
         return self.draws
+
+class CollectionMutator(Mutator):
+    mutations: list[Mutation] = []
+
+    def __init__(
+        self,
+        *,
+        random: Random,
+        value: Any,
+        min_size: int,
+        max_size: int | None,
+        draw_element: Callable,
+    ):
+        total_cost = _geometric(
+            min=1,
+            average=2.5,
+            max=7,
+            random=random,
+        )
+        super().__init__(total_cost=total_cost, random=random)
+
+        if max_size is None:
+            max_size = COLLECTION_DEFAULT_MAX_SIZE
+
+        self.value = value
+        self.min_size = min_size
+        self.max_size = max_size
+        self.draw_element = draw_element
+
+    def random_value(self, *, min_size, max_size, average_size):
+        size = _geometric(
+            min=min_size,
+            average=average_size,
+            max=max_size,
+            random=random,
+        )
+        return [self.draw_element() for _ in range(size)]
+
+    def _size(self, budget):
+        return self.random.randint(1, min(len(self.value), budget))
+
+    @mutation(p=1.5)
+    def delete_interval(self, budget):
+        # delete n1:n2
+        if len(self.value) == 0:
+            return self.DISABLED
+
+        # first pick a size, then pick a valid starting location
+        size = self._size(budget)
+        n = self.random.randint(0, len(self.value) - size)
+        del self.value[n : n + size]
+        return size
+
+    @mutation(p=1)
+    def swap_interval(self, budget):
+        # swap n1:n2 with n3:n4
+        if len(self.value) == 0:
+            return self.DISABLED
+        if len(self.value) == 1:
+            return 0
+
+        size1 = self._size(budget)
+        size2 = self._size(budget)
+        n1 = self.random.randint(0, len(self.value) - size1)
+        n2 = self.random.randint(0, len(self.value) - size2)
+
+        self.value[n1 : n1 + size1], self.value[n2 : n2 + size2] = (
+            self.value[n2 : n2 + size2],
+            self.value[n1 : n1 + size1],
+        )
+        return max(size1, size2)
+
+    @mutation(p=1)
+    def copy_interval(self, budget):
+        # copy n1:n2 to n3:n4
+        if len(self.value) == 0:
+            return self.DISABLED
+        if len(self.value) == 1:
+            return 0
+
+        size = self._size(budget)
+        # start of the first interval
+        n1 = self.random.randint(0, len(self.value) - size)
+        # start of the second interval. it's okay if these overlap
+        n2 = self.random.randint(0, len(self.value) - size)
+
+        self.value[n2 : n2 + size] = self.value[n1 : n1 + size]
+        return size
+
+    @mutation(p=1.5)
+    def replace_interval(self, budget):
+        # replace n1:n2 with random values
+        if len(self.value) == 0:
+            return self.DISABLED
+
+        size = self._size(budget)
+        n = self.random.randint(0, len(self.value) - size)
+        self.value[n : n + size] = [self.draw_element() for _ in range(size)]
+        return size
+
+    @mutation(p=1)
+    def insert_value(self, budget):
+        # insert a new random value at n
+        assert budget >= 1
+        n = self.random.randint(0, len(self.value))
+        max_size = min(7, budget)
+        v = self.random_value(
+            min_size=1,
+            average_size=min(2, max_size),
+            max_size=max_size,
+        )
+        self.value = self.value[:n] + v + self.value[n:]
+        return len(v)
+
+    def finish(self):
+        value = self.value
+        # add or remove random values to bring us back within the size bound
+        while len(value) < self.min_size:
+            add_idx = random.choice(list(range(len(value) + 1)))
+            value = value[:add_idx] + [self.draw_element()] + value[add_idx:]
+        while len(value) > self.max_size:
+            remove_idx = random.choice(list(range(len(value))))
+            value = value[:remove_idx] + value[remove_idx + 1 :]
+
+        assert self.min_size <= len(value) <= self.max_size
+        return value
 
 
 # inspection is expensive, run only once outside instead of on Mutator init.
 # also precalculate cumulative probs for mutation choices
-for _name, method in inspect.getmembers(Mutator, predicate=inspect.isfunction):
-    if not getattr(method, "_hypothesis_fuzzing_is_mutation", False):
-        continue
-    Mutator.mutations.append(Mutation(p=method._hypothesis_fuzzing_p, func=method))
+for MutatorClass in [NodeMutator, CollectionMutator]:
+    for _name, method in inspect.getmembers(MutatorClass, predicate=inspect.isfunction):
+        if not getattr(method, "_hypothesis_fuzzing_is_mutation", False):
+            continue
+        MutatorClass.mutations.append(
+            Mutation(p=method._hypothesis_fuzzing_p, func=method)
+        )
 
 
 def custom_mutator(data: bytes, *, random: Random, blackbox: bool) -> bytes:
-    print("HYPOTHESIS MUTATING FROM", data)
+    # print("HYPOTHESIS MUTATING FROM", data)
     t_start = time.time()
     statistics["num_calls"] += 1
 
@@ -765,8 +796,10 @@ def custom_mutator(data: bytes, *, random: Random, blackbox: bool) -> bytes:
         # this is only used as the random seed unless it coincidentally is a valid
         # ir bytestream. so we don't need BUFFER_SIZE randomness here.
         v = random.randbytes(10)
-        print("HYPOTHESIS FRESH", v)
-        return v
+        # print("HYPOTHESIS FRESH", v)
+        # BUT, we do want to be able to reduce this, which is basically impossible
+        # if we keep it as 10 bytes.
+        return v + bytes(MAX_SERIALIZED_SIZE - 10)
 
     # blackbox exploratory/warmup phase for the first 1k inputs
     # TODO we probably want an adaptive tradeoff here, "blackbox until n consecutive uninteresting inputs"
@@ -821,13 +854,13 @@ def custom_mutator(data: bytes, *, random: Random, blackbox: bool) -> bytes:
             average_cost = min(average_cost, max_cost * 0.2)
 
     total_cost = _geometric(
-        min_value=0 if max_cost == 0 else 1,
-        average_value=average_cost,
-        max_value=max_cost,
+        min=0 if max_cost == 0 else 1,
+        average=average_cost,
+        max=max_cost,
         random=random,
     )
 
-    mutated_draws = Mutator(total_cost=total_cost, draws=draws, random=random).mutate()
+    mutated_draws = NodeMutator(total_cost=total_cost, draws=draws, random=random).mutate()
     serialized_ir = ir_to_bytes([draw.value for draw in mutated_draws])
     serialized_ir = serialized_ir[:MAX_SERIALIZED_SIZE]
     assert len(serialized_ir) <= MAX_SERIALIZED_SIZE
@@ -836,7 +869,7 @@ def custom_mutator(data: bytes, *, random: Random, blackbox: bool) -> bytes:
     if track_per_item_stats:
         stats["after"] = [_make_serializable(draw.value) for draw in mutated_draws]
         statistics["per_item_stats"].append(stats)
-    print("HYPOTHESIS MUTATED TO", serialized_ir)
+    # print("HYPOTHESIS MUTATED TO", serialized_ir)
     return serialized_ir
 
 
@@ -916,7 +949,7 @@ class AtherisProvider(PrimitiveProvider):
         self.draws.append(
             Draw(ir_type=ir_type, kwargs=kwargs, value=value, forced=forced)
         )
-        print(f"HYPOTHESIS ATHERISPROVIDER DRAW_VALUE {value} (from {ir_type=}, {kwargs=})")
+        # print(f"HYPOTHESIS ATHERISPROVIDER DRAW_VALUE {value} (from {ir_type=}, {kwargs=})")
         return value
 
     def draw_boolean(self, **kwargs):
@@ -937,8 +970,8 @@ class AtherisProvider(PrimitiveProvider):
     @contextmanager
     def per_test_case_context_manager(self):
         self.draws_prefix = self._draws_prefix(self.buffer)
-        print("HYPOTHESIS ATHERISPROVIDER DATA", self.buffer)
-        print("HYPOTHESIS ATHERISPROVIDER DRAWS_PREFIX", self.draws_prefix)
+        # print("HYPOTHESIS ATHERISPROVIDER DATA", self.buffer)
+        # print("HYPOTHESIS ATHERISPROVIDER DRAWS_PREFIX", self.draws_prefix)
         self.draws_index: int = 0
         self.serialized_size: int = 0
         self.draws: List[Draw] = []

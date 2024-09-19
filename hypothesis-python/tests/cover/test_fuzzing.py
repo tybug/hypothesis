@@ -22,7 +22,8 @@ from hypothesis.database import ir_to_bytes
 from hypothesis.fuzzing import (
     AtherisProvider,
     Draw,
-    Mutator,
+    NodeMutator,
+    CollectionMutator,
     custom_mutator,
     mutate_string,
 )
@@ -416,12 +417,50 @@ def test_mutator_with_forced_nodes(draws, total_cost):
     forced_value = draw.value
     draw.forced = forced_value
 
-    mutated_draws = Mutator(total_cost=total_cost, draws=draws, random=r).mutate()
+    mutated_draws = NodeMutator(total_cost=total_cost, draws=draws, random=r).mutate()
     for draw in mutated_draws:
         if draw.forced is None:
             continue
         assert ir_value_equal(draw.ir_type, draw.value, forced_value)
 
+def test_collection_mutator_mutates_empty_collection():
+    def draw_element():
+        return r.choice("abcdefgh")
+
+    empties = 0
+    for _ in range(100):
+        mutated = "".join(
+            CollectionMutator(
+                value=[],
+                min_size=0,
+                max_size=100,
+                draw_element=draw_element,
+                random=r,
+            ).mutate()
+        )
+        if mutated == "":
+            empties += 1
+
+    # it's possible to mutate such that we insert a val and then immediate
+    # delete it. but this shouldn't happen very often.
+    assert empties <= 10, empties
+
+@given(st.text(), st.integers(0, 10), st.integers(0, 20))
+@settings(max_examples=1000)
+def test_collection_mutator(s, min_size, max_size):
+    assume(min_size <= max_size)
+    def draw_element():
+        return r.choice("abcdefg")
+
+    "".join(
+        CollectionMutator(
+            value=list(s),
+            min_size=min_size,
+            max_size=max_size,
+            draw_element=draw_element,
+            random=r,
+        ).mutate()
+    )
 
 @given(st.lists(draws()))
 def test_aligned_provider(draws):
