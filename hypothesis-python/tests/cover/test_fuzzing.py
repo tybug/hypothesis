@@ -423,6 +423,7 @@ def test_mutator_with_forced_nodes(draws, total_cost):
             continue
         assert ir_value_equal(draw.ir_type, draw.value, forced_value)
 
+
 def test_collection_mutator_mutates_empty_collection():
     def draw_element():
         return r.choice("abcdefgh")
@@ -445,10 +446,12 @@ def test_collection_mutator_mutates_empty_collection():
     # delete it. but this shouldn't happen very often.
     assert empties <= 10, empties
 
+
 @given(st.text(), st.integers(0, 10), st.integers(0, 20))
 @settings(max_examples=1000)
 def test_collection_mutator(s, min_size, max_size):
     assume(min_size <= max_size)
+
     def draw_element():
         return r.choice("abcdefg")
 
@@ -461,6 +464,7 @@ def test_collection_mutator(s, min_size, max_size):
             random=r,
         ).mutate()
     )
+
 
 @given(st.lists(draws()))
 def test_aligned_provider(draws):
