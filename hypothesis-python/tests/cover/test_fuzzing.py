@@ -16,7 +16,7 @@ from random import Random
 
 import pytest
 
-from hypothesis import assume, example, given, settings, strategies as st
+from hypothesis import assume, example, given, settings, strategies as st, Phase
 from hypothesis.core import BUFFER_SIZE
 from hypothesis.database import ir_to_bytes
 from hypothesis.fuzzing import (
@@ -417,11 +417,24 @@ def test_mutator_with_forced_nodes(draws, total_cost):
     forced_value = draw.value
     draw.forced = forced_value
 
-    mutated_draws = NodeMutator(total_cost=total_cost, draws=draws, random=r).mutate()
-    for draw in mutated_draws:
+    mutated = NodeMutator(total_cost=total_cost, draws=draws, random=r).mutate()
+    for draw in mutated:
         if draw.forced is None:
             continue
         assert ir_value_equal(draw.ir_type, draw.value, forced_value)
+
+
+@given(st.lists(draws()), st.integers(0, 100))
+@settings(max_examples=100)
+def test_node_mutator(draws, total_cost):
+    NodeMutator(total_cost=total_cost, draws=draws, random=r).mutate()
+
+
+@given(st.lists(draws(), max_size=1), st.integers(1, 100))
+@settings(max_examples=200)
+def test_node_mutator_does_not_delete_small_nodes(draws, total_cost):
+    mutated = NodeMutator(total_cost=total_cost, draws=draws, random=r).mutate()
+    assert len(mutated) == len(draws)
 
 
 def test_collection_mutator_mutates_empty_collection():

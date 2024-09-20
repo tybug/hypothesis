@@ -2726,16 +2726,20 @@ def bits_to_bytes(n: int) -> int:
     return (n + 7) >> 3
 
 
-def ir_to_buffer(ir_type, kwargs, *, forced=None, random=None):
+def ir_to_buffer(ir_type, kwargs, *, forced=None, random=None, prefix=None):
     from hypothesis.internal.conjecture.engine import BUFFER_SIZE
 
     if forced is None:
         assert random is not None
+    if prefix is not None:
+        assert forced is None
+    if prefix is None:
+        prefix = b""
 
     cd = ConjectureData(
         max_length=BUFFER_SIZE,
         # buffer doesn't matter if forced is passed since we're forcing the sole draw
-        prefix=b"" if forced is None else bytes(BUFFER_SIZE),
+        prefix=prefix if forced is None else bytes(BUFFER_SIZE),
         random=random,
     )
     value = getattr(cd.provider, f"draw_{ir_type}")(**kwargs, forced=forced)

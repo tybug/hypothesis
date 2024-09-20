@@ -70,9 +70,11 @@ print_stats_at = 25_000
 
 
 def _geometric(*, min, average, max, random):
-    assert min <= average <= max
-    assert min >= 0
-    if average <= 1:
+    assert min >= 0, min
+    average = clamp(min, average, max)
+    if average == 1:
+        return 1
+    if average < 1:
         return random.randint(0, 1)
 
     range_size = max - min + 1
@@ -92,6 +94,7 @@ def _geometric(*, min, average, max, random):
 def random_float_between(min_value, max_value, smallest_nonzero_magnitude, *, random):
     assert not math.isinf(min_value)
     assert not math.isinf(max_value)
+    assert sign_aware_lte(min_value, max_value)
 
     r = random.random()
     if flt.is_negative(min_value):
@@ -201,8 +204,8 @@ def nearby_number(value, *, min_value, max_value, random_value):
         max_point = min(max_value, max_point)
 
     forced = random_value(min_point, max_point)
-    assert min_value is None or min_value <= forced
-    assert max_value is None or forced <= max_value
+    assert min_value is None or min_value <= forced, (min_value, forced)
+    assert max_value is None or forced <= max_value, (max_value, forced)
     return forced
 
 
@@ -407,6 +410,12 @@ def mutate_string(value, *, min_size, max_size, intervals, random):
 
 
 def mutate_boolean(value, *, p):
+    # dont mutate to an invalid value
+    if p == 0:
+        return False
+    if p == 1:
+        return True
+
     assert 0 < p < 1
     assert value in {True, False}
     return not value
@@ -476,10 +485,15 @@ class Draw:
 
 class Mutator:
     DISABLED = object()
+    # class-level variable set by subclasses
+    mutations: List[Mutation] = []
 
     def __init__(self, *, total_cost: int, random: Random):
         self.total_cost = total_cost
         self.random = random
+        # shallow copy so we can delete mutations from the list when they get
+        # disabled
+        self.mutations = self.mutations.copy()
 
     def mutate(self):
         total_cost = 0
@@ -513,9 +527,15 @@ class NodeMutator(Mutator):
         super().__init__(total_cost=total_cost, random=random)
         # avoid mutating our saved draws list
         self.draws = draws.copy()
-        # invariant: we never change the number of draws, only their values.
-        # if we stop doing this then we will need to make this list dynamically
-        # update whenever we change the underlying draws list.
+        self.malleable_indices = []
+        self.nodes_deleted = 0
+
+        # we don't want malleable indices to be a dynamic property for speed,
+        # but we do need to update it whenever we change the size of the underlying
+        # draws list, or move the location of forced nodes.
+        self._update_malleable_indices()
+
+    def _update_malleable_indices(self):
         self.malleable_indices = [
             i for i, draw in enumerate(self.draws) if draw.forced is None
         ]
@@ -523,15 +543,13 @@ class NodeMutator(Mutator):
     @mutation(p=0.2)
     def copy_nodes(self, budget: int) -> int | object:
         assert budget >= 1
-        if not self.malleable_indices:
+        if len(self.draws) <= 1:
             return self.DISABLED
 
-        max_size = 12
-        average_size = 4
         size = _geometric(
             min=1,
-            average=min(average_size, budget),
-            max=min(max_size, budget),
+            average=4,
+            max=min(12, len(self.draws), budget),
             random=self.random,
         )
         start = random.randint(0, len(self.draws) - size)
@@ -640,8 +658,64 @@ class NodeMutator(Mutator):
         self.draws[i] = self.draws[i].with_value(value)
         return 1
 
+    @mutation(p=0.05)
+    def delete_nodes(self, budget: int) -> int | object:
+        assert budget >= 1
+        # dont delete if there's only a single node, because there's no point
+        # in having an empty ir tree
+        if len(self.draws) <= 1:
+            return self.DISABLED
+
+        # we don't really want to delete an enormous amount of nodes, so just
+        # cap it.
+        if self.nodes_deleted > 4:
+            return self.DISABLED
+
+        # upweight the chance that we remove [True, node] as a pair, which corresponds
+        # to deleting an element in a list. is this particularly principled? no.
+        # do I expect it to work well? yes.
+        # (TODO chance for more than one of these? pick a size then while True?)
+        if (
+            self.random.random() < 0.7
+            and (
+                bool_draws_i := [
+                    i
+                    for i, d in enumerate(self.draws)
+                    if d.ir_type == "boolean" and d.value is True
+                ]
+            )
+            and budget >= 2
+        ):
+            bool_draw_i = self.random.choice(bool_draws_i)
+            if bool_draw_i == len(self.draws):
+                return 0
+
+            del self.draws[bool_draw_i : bool_draw_i + 2]
+            self._update_malleable_indices()
+            self.nodes_deleted += 2
+            return 2
+
+        size = _geometric(
+            min=1,
+            average=2,
+            max=min(5, budget),
+            random=self.random,
+        )
+        n = 0
+        while n < size and len(self.draws) > 1:
+            del_i = self.random.choice(range(len(self.draws)))
+            del self.draws[del_i]
+            n += 1
+
+        # we changed the number of draw nodes, so we need to update the malleable
+        # indices.
+        self._update_malleable_indices()
+        self.nodes_deleted += n
+        return n
+
     def finish(self):
         return self.draws
+
 
 class CollectionMutator(Mutator):
     mutations: list[Mutation] = []
@@ -813,9 +887,6 @@ def custom_mutator(data: bytes, *, random: Random, blackbox: bool) -> bytes:
     if draws is None:
         # if it's not saved in the main cache and has also expired from the front
         # cache, degrade to blackbox.
-        # TODO this happens a lot in the beginning even when our cache is
-        # definitely not full. something else is going on here. what is libfuzzer
-        # doing? does it also do blackbox with some p?
         return _fresh()
 
     if track_per_item_stats:
@@ -860,7 +931,9 @@ def custom_mutator(data: bytes, *, random: Random, blackbox: bool) -> bytes:
         random=random,
     )
 
-    mutated_draws = NodeMutator(total_cost=total_cost, draws=draws, random=random).mutate()
+    mutated_draws = NodeMutator(
+        total_cost=total_cost, draws=draws, random=random
+    ).mutate()
     serialized_ir = ir_to_bytes([draw.value for draw in mutated_draws])
     serialized_ir = serialized_ir[:MAX_SERIALIZED_SIZE]
     assert len(serialized_ir) <= MAX_SERIALIZED_SIZE
@@ -890,9 +963,13 @@ class AtherisProvider(PrimitiveProvider):
             return None
         return [(ir_type(type(v)), v) for v in values]
 
-    def random_value(self, ir_type: IRTypeName, kwargs: IRKWargsType) -> IRType:
+    def random_value(
+        self, ir_type: IRTypeName, kwargs: IRKWargsType, *, prefix=None
+    ) -> IRType:
         try:
-            (value, buf) = ir_to_buffer(ir_type, kwargs, random=self.random)
+            (value, buf) = ir_to_buffer(
+                ir_type, kwargs, random=self.random, prefix=prefix
+            )
         except StopTest:
             # possible for a fresh data to overrun if we get unlucky with e.g.
             # integer probes.
@@ -911,7 +988,10 @@ class AtherisProvider(PrimitiveProvider):
             # this buffer wasn't in our cache, do total random generation
             return self.random_value(ir_type, kwargs)
         if self.draws_index >= len(self.draws_prefix):
-            return self.random_value(ir_type, kwargs)
+            # we've overrun our draws. we don't want to abort this test case, but
+            # we also don't want to generate something much larger than we had
+            # before. use a zero prefix to generate the simplest possible value.
+            return self.random_value(ir_type, kwargs, prefix=bytes(BUFFER_SIZE))
 
         if not self._aligned(ir_type, kwargs):
             # try realigning: pop draws until we realign or run out. if we realign,

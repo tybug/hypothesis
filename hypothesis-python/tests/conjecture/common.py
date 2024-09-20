@@ -298,6 +298,8 @@ def float_kwargs(draw, *, use_min_value=None, use_max_value=None, use_forced=Fal
         max_value = draw(st.floats(min_value=min_val, allow_nan=False))
 
     largest_magnitude = max(abs(min_value), abs(max_value))
+    # just be normal please
+    largest_magnitude = min(largest_magnitude, 1)
     # can't force something smaller than our smallest magnitude.
     if pivot is not None and pivot != 0.0:
         largest_magnitude = min(largest_magnitude, pivot)
