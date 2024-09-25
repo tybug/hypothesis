@@ -40,6 +40,7 @@ from hypothesis.internal.conjecture.data import (
 from hypothesis.internal.conjecture.engine import BUFFER_SIZE
 from hypothesis.internal.conjecture.junkdrawer import clamp
 from hypothesis.internal.floats import next_down, next_up, sign_aware_lte
+from hypothesis.internal.compat import int_from_bytes
 
 INT_SIZES = (8, 16, 32, 64, 128)
 INT_SIZES_WEIGHTS = (4.0, 8.0, 1.0, 1.0, 0.5)
@@ -862,6 +863,43 @@ for MutatorClass in [NodeMutator, CollectionMutator]:
         )
 
 
+SIZE_UNCAPPED = b"\x00"
+
+
+def _size_cap(n):
+    # - 10 inputs per byte for the first 20 inputs
+    # - 5 inputs per byte for the next 50 inputs
+    # - 1 input per byte for the next 50 inputs
+    # - 5 bytes per input for the next 50 inputs
+    # - 20 bytes per input for the next 50 inputs
+    size = 1
+    if n >= 20:
+        size += (n - 20) // 5
+    if n >= 70:
+        size += n - 70
+    if n >= 130:
+        size += (n - 130) * 5
+    if n >= 180:
+        size += (n - 130) * 20
+    return size
+
+
+def _fresh_input(*, size_cap: int | None = None):
+    # size_cap must fit inside a single byte, and 0 is our INTERPRET_IR marker
+    # so it can't be that
+    if size_cap is not None:
+        assert 1 <= size_cap <= 255
+
+    # this is only used as the random seed unless it coincidentally is a valid
+    # ir bytestream. so we don't need all BUFFER_SIZE randomness here.
+    #
+    # TODO is this harming things by always being a REDUCE input if applicable?
+    # since 10 bytes is so small it will ~always be a reduction
+    v = random.randbytes(10)
+    prefix = SIZE_UNCAPPED if size_cap is None else size_cap.to_bytes(1, "big")
+    return prefix + v
+
+
 def custom_mutator(data: bytes, *, random: Random, blackbox: bool) -> bytes:
     # print("HYPOTHESIS MUTATING FROM", data)
     t_start = time.time()
@@ -872,20 +910,10 @@ def custom_mutator(data: bytes, *, random: Random, blackbox: bool) -> bytes:
 
     stats = {}
 
-    def _fresh():
+    # blackbox exploratory/warmup phase for the first set of inputs
+    if blackbox and statistics["num_calls"] < 254:
         stats["mode"] = "fresh"
-        # this is only used as the random seed unless it coincidentally is a valid
-        # ir bytestream. so we don't need BUFFER_SIZE randomness here.
-        v = random.randbytes(10)
-        # print("HYPOTHESIS FRESH", v)
-        # BUT, we do want to be able to reduce this, which is basically impossible
-        # if we keep it as 10 bytes.
-        return v + bytes(MAX_SERIALIZED_SIZE - 10)
-
-    # blackbox exploratory/warmup phase for the first 1k inputs
-    # TODO we probably want an adaptive tradeoff here, "blackbox until n consecutive uninteresting inputs"
-    if blackbox and statistics["num_calls"] < 300:
-        return _fresh()
+        return _fresh_input(size_cap=statistics["num_calls"])
 
     # sometimes the entropic scheduler will mutate an input we just generated,
     # but didn't deem interesting. if we still have that in the front cache,
@@ -894,7 +922,8 @@ def custom_mutator(data: bytes, *, random: Random, blackbox: bool) -> bytes:
     if draws is None:
         # if it's not saved in the main cache and has also expired from the front
         # cache, degrade to blackbox.
-        return _fresh()
+        stats["mode"] = "fresh"
+        return _fresh_input()
 
     if track_per_item_stats:
         stats["mode"] = "mutate"
@@ -950,7 +979,7 @@ def custom_mutator(data: bytes, *, random: Random, blackbox: bool) -> bytes:
         stats["after"] = [_make_serializable(draw.value) for draw in mutated_draws]
         statistics["per_item_stats"].append(stats)
     # print("HYPOTHESIS MUTATED TO", serialized_ir)
-    return serialized_ir
+    return SIZE_UNCAPPED + serialized_ir
 
 
 class AtherisProvider(PrimitiveProvider):
@@ -973,6 +1002,18 @@ class AtherisProvider(PrimitiveProvider):
     def random_value(
         self, ir_type: IRTypeName, kwargs: IRKWargsType, *, prefix=None
     ) -> IRType:
+        if self.draws_prefix is not None and self.draws_index >= len(self.draws_prefix):
+            # we've overrun our draws. we don't want to abort this test case, but
+            # we also don't want to generate something much larger than we had
+            # before. use a zero prefix to generate the simplest possible value.
+            prefix = bytes(BUFFER_SIZE)
+
+        if (
+            self.max_serialized_size is not None
+            and self.serialized_size >= self.max_serialized_size
+        ):
+            prefix = bytes(BUFFER_SIZE)
+
         try:
             (value, buf) = ir_to_buffer(
                 ir_type, kwargs, random=self.random, prefix=prefix
@@ -995,10 +1036,7 @@ class AtherisProvider(PrimitiveProvider):
             # this buffer wasn't in our cache, do total random generation
             return self.random_value(ir_type, kwargs)
         if self.draws_index >= len(self.draws_prefix):
-            # we've overrun our draws. we don't want to abort this test case, but
-            # we also don't want to generate something much larger than we had
-            # before. use a zero prefix to generate the simplest possible value.
-            return self.random_value(ir_type, kwargs, prefix=bytes(BUFFER_SIZE))
+            return self.random_value(ir_type, kwargs)
 
         if not self._aligned(ir_type, kwargs):
             # try realigning: pop draws until we realign or run out. if we realign,
@@ -1056,7 +1094,16 @@ class AtherisProvider(PrimitiveProvider):
 
     @contextmanager
     def per_test_case_context_manager(self):
-        self.draws_prefix = self._draws_prefix(self.buffer)
+        self.max_serialized_size = None
+        if len(self.buffer) > 0:
+            prefix = self.buffer[0]
+            self.max_serialized_size = (
+                None if prefix == int_from_bytes(SIZE_UNCAPPED) else _size_cap(prefix)
+            )
+
+        ir_buffer = self.buffer[1:]
+        self.draws_prefix = self._draws_prefix(ir_buffer)
+
         # print("HYPOTHESIS ATHERISPROVIDER DATA", self.buffer)
         # print("HYPOTHESIS ATHERISPROVIDER DRAWS_PREFIX", self.draws_prefix)
         self.draws_index: int = 0

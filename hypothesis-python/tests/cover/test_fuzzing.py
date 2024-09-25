@@ -16,7 +16,7 @@ from random import Random
 
 import pytest
 
-from hypothesis import assume, example, given, settings, strategies as st, Phase
+from hypothesis import assume, example, given, settings, strategies as st
 from hypothesis.core import BUFFER_SIZE
 from hypothesis.database import ir_to_bytes
 from hypothesis.fuzzing import (
@@ -26,6 +26,7 @@ from hypothesis.fuzzing import (
     CollectionMutator,
     custom_mutator,
     mutate_string,
+    SIZE_UNCAPPED
 )
 from hypothesis.internal.conjecture.data import ConjectureData, ir_value_equal
 from hypothesis.internal.floats import next_down, next_up
@@ -53,7 +54,7 @@ def serialized_ir(draw):
             | st.binary()
         )
     )
-    return ir_to_bytes(values)
+    return SIZE_UNCAPPED + ir_to_bytes(values)
 
 
 @st.composite
@@ -68,7 +69,7 @@ def fuzz(f, *, start, mode, max_examples):
         args=(), kwargs={}, use_atheris=mode == "atheris"
     )
     if isinstance(start, list):
-        start = ir_to_bytes(start)
+        start = SIZE_UNCAPPED + ir_to_bytes(start)
     elif not isinstance(start, bytes):
         assert False, "must be either a bytes-serialized ir or list of ir nodes"
     fuzz_one_input(start)
@@ -482,7 +483,7 @@ def test_collection_mutator(s, min_size, max_size):
 @given(st.lists(draws()))
 def test_aligned_provider(draws):
     data = ConjectureData(BUFFER_SIZE, b"", provider=AtherisProvider)
-    data.provider.buffer = ir_to_bytes([d.value for d in draws])
+    data.provider.buffer = SIZE_UNCAPPED + ir_to_bytes([d.value for d in draws])
 
     with data.provider.per_test_case_context_manager():
         for draw in draws:
