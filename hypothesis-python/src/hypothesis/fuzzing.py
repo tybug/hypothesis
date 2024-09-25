@@ -758,7 +758,7 @@ class CollectionMutator(Mutator):
     def _size(self, budget):
         return self.random.randint(1, min(len(self.value), budget))
 
-    @mutation(p=1.5)
+    @mutation(p=1)
     def delete_interval(self, budget):
         # delete n1:n2
         if len(self.value) == 0:
@@ -770,7 +770,7 @@ class CollectionMutator(Mutator):
         del self.value[n : n + size]
         return size
 
-    @mutation(p=1)
+    @mutation(p=0.5)
     def swap_interval(self, budget):
         # swap n1:n2 with n3:n4
         if len(self.value) == 0:
@@ -782,6 +782,9 @@ class CollectionMutator(Mutator):
         size2 = self._size(budget)
         n1 = self.random.randint(0, len(self.value) - size1)
         n2 = self.random.randint(0, len(self.value) - size2)
+        if n1 == n2:
+            # don't swap an interval to itself
+            return 0
 
         self.value[n1 : n1 + size1], self.value[n2 : n2 + size2] = (
             self.value[n2 : n2 + size2],
@@ -789,7 +792,7 @@ class CollectionMutator(Mutator):
         )
         return max(size1, size2)
 
-    @mutation(p=1)
+    @mutation(p=0.5)
     def copy_interval(self, budget):
         # copy n1:n2 to n3:n4
         if len(self.value) == 0:
@@ -802,11 +805,14 @@ class CollectionMutator(Mutator):
         n1 = self.random.randint(0, len(self.value) - size)
         # start of the second interval. it's okay if these overlap
         n2 = self.random.randint(0, len(self.value) - size)
+        if n1 == n2:
+            # don't copy an interval to itself
+            return 0
 
         self.value[n2 : n2 + size] = self.value[n1 : n1 + size]
         return size
 
-    @mutation(p=1.5)
+    @mutation(p=1)
     def replace_interval(self, budget):
         # replace n1:n2 with random values
         if len(self.value) == 0:
