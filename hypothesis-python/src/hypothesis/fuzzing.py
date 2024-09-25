@@ -67,6 +67,7 @@ statistics: Statistics = {
 }
 track_per_item_stats = False
 print_stats_at = 25_000
+global_fuzzing_use_ir = True
 
 
 def _geometric(*, min, average, max, random):
