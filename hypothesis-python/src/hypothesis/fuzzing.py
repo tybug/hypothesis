@@ -18,6 +18,7 @@ from pathlib import Path
 from random import Random
 from typing import Any, Callable, Dict, List, Mapping, TypedDict
 import abc
+from types import SimpleNamespace
 
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
@@ -407,7 +408,7 @@ def mutate_string(value, *, min_size, max_size, intervals, random):
             random=random,
         ).mutate()
     )
-    # print(f"{value} |->| {x}")
+    # print(f"string mutator. {value} |->| {x}")
     return x
 
 
@@ -455,10 +456,9 @@ def _get_draws_from_cache(buffer: bytes) -> List["Draw"] | None:
             return None
 
 
-def mutation(*, p: float) -> Callable:
+def mutation(*, p: float, repeatable: bool = False) -> Callable:
     def accept(f):
-        f._hypothesis_fuzzing_is_mutation = True
-        f._hypothesis_fuzzing_p = p
+        f._hypothesis_mutation = SimpleNamespace(p=p, repeatable=repeatable)
         return f
 
     return accept
@@ -468,6 +468,7 @@ def mutation(*, p: float) -> Callable:
 class Mutation:
     p: int
     func: Callable
+    repeatable: bool
 
 
 @dataclass(slots=True)
@@ -477,12 +478,23 @@ class Draw:
     value: IRType
     forced: IRType | None
 
-    def with_value(self, value: IRType) -> "Draw":
-        if self.forced is not None:
-            assert ir_value_equal(self.ir_type, value, self.forced)
+    def copy(self, *, with_value: IRType = None) -> "Draw":
+        if with_value is not None and self.forced is not None:
+            assert ir_value_equal(self.ir_type, with_value, self.forced)
+
         return Draw(
-            ir_type=self.ir_type, kwargs=self.kwargs, value=value, forced=self.forced
+            ir_type=self.ir_type,
+            kwargs=self.kwargs,
+            value=self.value if with_value is None else with_value,
+            forced=self.forced,
         )
+
+
+class MutationMessage(TypedDict):
+    name: str
+    p: int
+    cost: int | object
+    info: dict | None
 
 
 class Mutator:
@@ -496,15 +508,39 @@ class Mutator:
         # shallow copy so we can delete mutations from the list when they get
         # disabled
         self.mutations = self.mutations.copy()
+        self.mutation_messages: list[MutationMessage] = []
 
     def mutate(self):
+        # TODO with some low prob, disable some number of random mutations? (swarm testing)
         total_cost = 0
-        while total_cost < self.total_cost and self.mutations:
+        while total_cost <= (self.total_cost - 1) and self.mutations:
+            budget = int(self.total_cost - total_cost)
+            assert budget >= 1
             mutation = self.choose_mutation()
-            cost = mutation.func(self, budget=self.total_cost - total_cost)
+
+            kwargs = {}
+            if mutation.repeatable:
+                # if this mutation is repeatable, repeat it (potentially many times)
+                # with some low p.
+                count = 1
+                if self.random.random() < 0.05:
+                    count += _geometric(min=1, average=10, max=50, random=self.random)
+                kwargs["count"] = count
+
+            cost = mutation.func(self, budget=budget, **kwargs)
+            self.mutation_messages.append(
+                {
+                    "name": mutation.func.__name__,
+                    "p": mutation.p,
+                    "cost": cost,
+                    "kwargs": kwargs,
+                    "info": {},
+                }
+            )
             if cost is self.DISABLED:
                 self.mutations.remove(mutation)
                 continue
+
             total_cost += cost
 
         return self.finish()
@@ -530,7 +566,6 @@ class NodeMutator(Mutator):
         # avoid mutating our saved draws list
         self.draws = draws.copy()
         self.malleable_indices = []
-        self.nodes_deleted = 0
 
         # we don't want malleable indices to be a dynamic property for speed,
         # but we do need to update it whenever we change the size of the underlying
@@ -551,15 +586,28 @@ class NodeMutator(Mutator):
         size = _geometric(
             min=1,
             average=4,
-            max=min(12, len(self.draws), budget),
+            # we don't allow overlapping copies, so the largest we can be is len // 2.
+            max=min(20, len(self.draws) // 2, budget),
             random=self.random,
         )
         start = random.randint(0, len(self.draws) - size)
 
-        def try_find_target(size: int) -> int | None:
+        def _try_find_target_start(size: int) -> int | None:
             target_start = random.randint(0, len(self.draws) - size)
             # dont copy a sequence with itself
             if target_start == start:
+                return None
+
+            # don't allow overlapping copies for now. I'm actually not sure if there
+            # is a case where an overlapping copy is better than doing a non-overlapping
+            # copy instead. If there is, we may want to reconsider this with some p.
+            #
+            # The only case I can think of is one where a non-overlapping copy is not
+            # possible, and so an overlapping copy at least lets you get some benefit.
+            # I suppose this is possible? But I think I'd rather bail early in those
+            # cases (because we chose a too-large size) and save the mutation budget
+            # for elsewhere, including potentially a future copy_nodes with a lower size.
+            if abs(target_start - start) < size:
                 return None
 
             for i in range(size):
@@ -589,76 +637,160 @@ class NodeMutator(Mutator):
 
             return target_start
 
-        # now try to find a target sequence with the right ir types and kwargs
-        target_start = None
-        for _ in range(4):
-            target_start = try_find_target(size)
-            if target_start is not None:
-                break
+        def find_target_starts(
+            size: int, *, max_targets: int, attempts: int
+        ) -> int | None:
+            target_starts = set()
+            for _ in range(attempts):
+                target_start = _try_find_target_start(size)
+                if target_start is not None:
+                    target_starts.add(target_start)
+                if len(target_starts) == max_targets:
+                    break
+            assert len(target_starts) <= max_targets
+            return list(target_starts)
 
+        # now try to find a target sequence with the right ir types and kwargs
+        target_starts = find_target_starts(size, max_targets=1, attempts=4)
         # couldn't find a copy target. we haven't changed anything, so the cost is 0.
-        if target_start is None:
+        if not target_starts:
             return 0
 
+        target_start = target_starts[0]
         for i in range(size):
             value = self.draws[start + i].value
-            self.draws[target_start + i] = self.draws[target_start + i].with_value(
-                value
+            self.draws[target_start + i] = self.draws[target_start + i].copy(
+                with_value=value
             )
 
         # we changed `size` nodes, which is therefore our cost.
         return size
 
-    @mutation(p=1)
-    def mutate_node(self, budget: int) -> int | object:
+    @mutation(p=0.2, repeatable=True)
+    def repeat_nodes(self, budget: int, count: int) -> int | object:
+        # look for a sequence of nodes and then insert `count` copies of it after
+        if len(self.draws) <= 1:
+            return self.DISABLED
+
+        # size 2 here is an intentional and weird choice. repeating nodes is most
+        # (and perhaps exclusively) likely to help with duplicating list elements,
+        # which requires at least two nodes: the boolean True and the node after
+        # (but an element may also have more than one corresponding node depending
+        # on complexity).
+        size = _geometric(
+            min=2,
+            average=4,
+            max=min(20, len(self.draws), budget),
+            random=self.random,
+        )
+
+        if self.random.random() < 0.7 and (
+            bool_draws_i := [
+                i
+                for i, d in enumerate(self.draws)
+                if d.ir_type == "boolean"
+                and d.value is True
+                and i <= len(self.draws) - size
+            ]
+        ):
+            start = self.random.choice(bool_draws_i)
+        else:
+            start = random.randint(0, len(self.draws) - size)
+
+        copies = []
+        for _ in range(count):
+            copies += [self.draws[j].copy() for j in range(start, start + size)]
+        self.draws = self.draws[: start + size] + copies + self.draws[start + size :]
+        self._update_malleable_indices()
+        return size * count
+
+    @mutation(p=1, repeatable=True)
+    def mutate_node(self, budget: int, count: int) -> int | object:
         assert budget >= 1
         if not self.malleable_indices:
             return self.DISABLED
 
+        def mutate_node(i):
+            draw = self.draws[i]
+            ir_type = draw.ir_type
+            kwargs: Any = draw.kwargs
+            if ir_type == "integer":
+                value = mutate_integer(
+                    draw.value,
+                    min_value=kwargs["min_value"],
+                    max_value=kwargs["max_value"],
+                    random=random,
+                )
+            elif ir_type == "boolean":
+                value = mutate_boolean(draw.value, p=kwargs["p"])
+            elif ir_type == "bytes":
+                value = mutate_bytes(
+                    draw.value,
+                    min_size=kwargs["min_size"],
+                    max_size=kwargs["max_size"],
+                    random=random,
+                )
+            elif ir_type == "string":
+                value = mutate_string(
+                    draw.value,
+                    min_size=kwargs["min_size"],
+                    max_size=kwargs["max_size"],
+                    intervals=kwargs["intervals"],
+                    random=random,
+                )
+            elif ir_type == "float":
+                value = mutate_float(
+                    draw.value,
+                    min_value=kwargs["min_value"],
+                    max_value=kwargs["max_value"],
+                    allow_nan=kwargs["allow_nan"],
+                    smallest_nonzero_magnitude=kwargs["smallest_nonzero_magnitude"],
+                    random=random,
+                )
+            else:
+                raise Exception(f"unhandled case ({ir_type=})")
+
+            # print(f"{self.draws[i].value} |->| {value}")
+            self.draws[i] = self.draws[i].copy(with_value=value)
+
+        def mutate_nodes(indices):
+            for i in indices:
+                mutate_node(i)
+
         i = self.random.choice(self.malleable_indices)
-        draw = self.draws[i]
-        ir_type = draw.ir_type
-        kwargs: Any = draw.kwargs
+        if count == 1:
+            mutate_node(i)
+            return 1
 
-        if ir_type == "integer":
-            value = mutate_integer(
-                draw.value,
-                min_value=kwargs["min_value"],
-                max_value=kwargs["max_value"],
-                random=random,
-            )
-        elif ir_type == "boolean":
-            value = mutate_boolean(draw.value, p=kwargs["p"])
-        elif ir_type == "bytes":
-            value = mutate_bytes(
-                draw.value,
-                min_size=kwargs["min_size"],
-                max_size=kwargs["max_size"],
-                random=random,
-            )
-        elif ir_type == "string":
-            value = mutate_string(
-                draw.value,
-                min_size=kwargs["min_size"],
-                max_size=kwargs["max_size"],
-                intervals=kwargs["intervals"],
-                random=random,
-            )
-        elif ir_type == "float":
-            value = mutate_float(
-                draw.value,
-                min_value=kwargs["min_value"],
-                max_value=kwargs["max_value"],
-                allow_nan=kwargs["allow_nan"],
-                smallest_nonzero_magnitude=kwargs["smallest_nonzero_magnitude"],
-                random=random,
-            )
+        # TODO we'd like to expose these as "swarm options" eventually, and leave
+        # it to our master algorithm to choose which one to enable or repeat. This
+        # requires a relatively rich language for expressing e.g. incompatible
+        # swarm options and sub-options for individual mutations, as well as relative
+        # probabilities, so I'm not taking it on right now.
+
+        # with equal probability, choose to either mutate nodes of the same chosen
+        # type a la swarm testing, or mutate sequential indices.
+        # repeating mutate_node arbitrarily is probably not too helpful because it
+        # degrades to blackbox.
+        if self.random.random() < 0.5:
+            # mutate only nodes of the same type a la swarm testing. repeating mutate_node
+            # arbitrarily is probably not too helpful because it degrades to blackbox.
+            chosen_ir_type = self.draws[i].ir_type
+            possible_indices = [
+                i
+                for i in self.malleable_indices
+                if self.draws[i].ir_type == chosen_ir_type
+            ]
+            count = min(count, len(possible_indices))
+            mutate_nodes(self.random.sample(possible_indices, k=count))
+            return count
         else:
-            raise Exception(f"unhandled case ({ir_type=})")
-
-        # print(f"{self.draws[i].value} |->| {value}")
-        self.draws[i] = self.draws[i].with_value(value)
-        return 1
+            # [i, end)
+            end = min(i + count, len(self.malleable_indices))
+            # avoid mutating forced nodes that may have been between sequential
+            # malleable nodes
+            mutate_nodes(j for j in range(i, end) if self.draws[j].forced is None)
+            return count
 
     @mutation(p=0.05)
     def delete_nodes(self, budget: int) -> int | object:
@@ -668,34 +800,28 @@ class NodeMutator(Mutator):
         if len(self.draws) <= 1:
             return self.DISABLED
 
-        # we don't really want to delete an enormous amount of nodes, so just
-        # cap it.
-        if self.nodes_deleted > 4:
-            return self.DISABLED
-
         # upweight the chance that we remove [True, node] as a pair, which corresponds
         # to deleting an element in a list. is this particularly principled? no.
         # do I expect it to work well? yes.
         # (TODO chance for more than one of these? pick a size then while True?)
+        size = 2
         if (
             self.random.random() < 0.7
             and (
                 bool_draws_i := [
                     i
                     for i, d in enumerate(self.draws)
-                    if d.ir_type == "boolean" and d.value is True
+                    if d.ir_type == "boolean"
+                    and d.value is True
+                    and i <= len(self.draws) - size
                 ]
             )
-            and budget >= 2
+            and budget >= size
         ):
             bool_draw_i = self.random.choice(bool_draws_i)
-            if bool_draw_i == len(self.draws):
-                return 0
-
-            del self.draws[bool_draw_i : bool_draw_i + 2]
+            del self.draws[bool_draw_i : bool_draw_i + size]
             self._update_malleable_indices()
-            self.nodes_deleted += 2
-            return 2
+            return size
 
         size = _geometric(
             min=1,
@@ -712,7 +838,6 @@ class NodeMutator(Mutator):
         # we changed the number of draw nodes, so we need to update the malleable
         # indices.
         self._update_malleable_indices()
-        self.nodes_deleted += n
         return n
 
     def finish(self):
@@ -791,6 +916,7 @@ class CollectionMutator(Mutator):
             self.value[n2 : n2 + size2],
             self.value[n1 : n1 + size1],
         )
+        # print(f"swap interval {n1=} {n2=} {size1=} {size2=}")
         return max(size1, size2)
 
     @mutation(p=0.5)
@@ -811,6 +937,7 @@ class CollectionMutator(Mutator):
             return 0
 
         self.value[n2 : n2 + size] = self.value[n1 : n1 + size]
+        # print(f"copy interval {n1=} {n2=} {size=}")
         return size
 
     @mutation(p=1)
@@ -856,10 +983,11 @@ class CollectionMutator(Mutator):
 # also precalculate cumulative probs for mutation choices
 for MutatorClass in [NodeMutator, CollectionMutator]:
     for _name, method in inspect.getmembers(MutatorClass, predicate=inspect.isfunction):
-        if not getattr(method, "_hypothesis_fuzzing_is_mutation", False):
+        if not hasattr(method, "_hypothesis_mutation"):
             continue
+        data = method._hypothesis_mutation
         MutatorClass.mutations.append(
-            Mutation(p=method._hypothesis_fuzzing_p, func=method)
+            Mutation(func=method, p=data.p, repeatable=data.repeatable)
         )
 
 
