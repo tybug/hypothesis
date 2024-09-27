@@ -930,7 +930,8 @@ class CollectionMutator(Mutator):
         size = self._size(budget)
         # start of the first interval
         n1 = self.random.randint(0, len(self.value) - size)
-        # start of the second interval. it's okay if these overlap
+        # start of the second interval. it's okay if these overlap (though maybe
+        # it shouldn't be? cf copy_nodes)
         n2 = self.random.randint(0, len(self.value) - size)
         if n1 == n2:
             # don't copy an interval to itself
@@ -1032,9 +1033,6 @@ def custom_mutator(data: bytes, *, random: Random, blackbox: bool) -> bytes:
     # print("HYPOTHESIS MUTATING FROM", data)
     t_start = time.time()
     statistics["num_calls"] += 1
-
-    if statistics["num_calls"] % 1000 == 0:
-        print(statistics["time_mutating"])
 
     stats = {}
 
