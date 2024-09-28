@@ -967,6 +967,26 @@ class CollectionMutator(Mutator):
         self.value = self.value[:n] + v + self.value[n:]
         return len(v)
 
+    @mutation(p=0.2, repeatable=True)
+    def repeat_elements(self, budget: int, count: int) -> int | object:
+        if len(self.value) <= 1:
+            return self.DISABLED
+
+        size = _geometric(
+            min=1,
+            average=1.5,
+            max=min(5, len(self.value), budget),
+            random=self.random,
+        )
+
+        start = random.randint(0, len(self.value) - size)
+        self.value = (
+            self.value[: start + size]
+            + self.value[start : start + size] * count
+            + self.value[start + size :]
+        )
+        return size * count
+
     def finish(self):
         value = self.value
         # add or remove random values to bring us back within the size bound
