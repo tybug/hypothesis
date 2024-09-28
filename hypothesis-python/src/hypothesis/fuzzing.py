@@ -43,10 +43,12 @@ from hypothesis.internal.conjecture.junkdrawer import clamp
 from hypothesis.internal.floats import next_down, next_up, sign_aware_lte
 from hypothesis.internal.compat import int_from_bytes
 
-INT_SIZES = (8, 16, 32, 64, 128)
-INT_SIZES_WEIGHTS = (4.0, 8.0, 1.0, 1.0, 0.5)
-FLOAT_SIZES = (8, 16, 32, 64, 128, 1024)
-FLOAT_SIZES_WEIGHTS = (4.0, 8.0, 1.0, 1.0, 0.5, 0.5)
+# fmt: off
+INT_SIZES           = (8,   16,  32,  64,  128)
+INT_SIZES_WEIGHTS   = (4.0, 8.0, 1.0, 1.0, 0.5)
+FLOAT_SIZES         = (8,   16,  32,  64,  128, 256, 512, 1024)
+FLOAT_SIZES_WEIGHTS = (4.0, 8.0, 1.0, 1.0, 0.5, 0.5, 0.5, 0.5)
+# fmt: on
 MAX_SERIALIZED_SIZE = BUFFER_SIZE
 # explicitly not thread-local so that the watchdog thread can access it
 data_to_draws_unsaved: Mapping[bytes, List["Draw"]] = LRUCache(
