@@ -959,11 +959,10 @@ class CollectionMutator(Mutator):
         # insert a new random value at n
         assert budget >= 1
         n = self.random.randint(0, len(self.value))
-        max_size = min(7, budget)
         v = self.random_value(
             min_size=1,
-            average_size=min(2, max_size),
-            max_size=max_size,
+            average_size=2,
+            max_size=min(7, budget),
         )
         self.value = self.value[:n] + v + self.value[n:]
         return len(v)
