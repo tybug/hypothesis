@@ -26,7 +26,7 @@ from hypothesis.fuzzing import (
     CollectionMutator,
     custom_mutator,
     mutate_string,
-    SIZE_UNCAPPED
+    SIZE_UNCAPPED,
 )
 from hypothesis.internal.conjecture.data import ConjectureData, ir_value_equal
 from hypothesis.internal.floats import next_down, next_up
