@@ -1117,16 +1117,16 @@ def custom_mutator(data: bytes, *, random: Random, blackbox: bool) -> bytes:
     mutated_draws = NodeMutator(
         total_cost=total_cost, draws=draws, random=random
     ).mutate()
-    serialized_ir = ir_to_bytes([draw.value for draw in mutated_draws])
+    serialized_ir = SIZE_UNCAPPED + ir_to_bytes([draw.value for draw in mutated_draws])
     serialized_ir = serialized_ir[:MAX_SERIALIZED_SIZE]
-    assert len(serialized_ir) <= MAX_SERIALIZED_SIZE
 
     statistics["time_mutating"] += time.time() - t_start
     if track_per_item_stats:
         stats["after"] = [_make_serializable(draw.value) for draw in mutated_draws]
         statistics["per_item_stats"].append(stats)
     # print("HYPOTHESIS MUTATED TO", serialized_ir)
-    return SIZE_UNCAPPED + serialized_ir
+    assert len(serialized_ir) <= MAX_SERIALIZED_SIZE
+    return serialized_ir
 
 
 class AtherisProvider(PrimitiveProvider):
