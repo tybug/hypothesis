@@ -551,12 +551,22 @@ class Mutator:
             mutation = self.choose_mutation()
 
             kwargs = {}
+            force_cost = None
             if mutation.repeatable:
                 # if this mutation is repeatable, repeat it (potentially many times)
                 # with some low p.
                 count = 1
-                if self.random.random() < 0.05:
-                    count += _geometric(min=1, average=10, max=50, random=self.random)
+                if self.random.random() < 0.1:
+                    count += _geometric(min=1, average=8, max=40, random=self.random)
+                    # repeatable mutations are technically very expensive in cost.
+                    # if we took their full cost, we would hardly ever combine a repeatable
+                    # mutation with other mutations. but, this combination is very desirable:
+                    # consider repeating characters of a string 20 times and then moving part
+                    # of that repeated portion somewhere else.
+                    #
+                    # we manually downweight all repeated mutations to cost 1 to try
+                    # and engender these combinations.
+                    force_cost = 1
                 kwargs["count"] = count
 
             cost = mutation.func(self, budget=budget, **kwargs)
@@ -573,7 +583,7 @@ class Mutator:
                 self.mutations.remove(mutation)
                 continue
 
-            total_cost += cost
+            total_cost += force_cost or cost
 
         return self.finish()
 
@@ -894,6 +904,7 @@ class CollectionMutator(Mutator):
             max=7,
             random=random,
         )
+        assert total_cost > 0
         super().__init__(total_cost=total_cost, random=random)
 
         if max_size is None:
