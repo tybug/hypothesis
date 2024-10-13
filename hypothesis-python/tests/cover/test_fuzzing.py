@@ -38,7 +38,6 @@ from tests.common.utils import flaky
 from tests.conjecture.common import draw_value, ir_types_and_kwargs
 
 MARKER = uuid.uuid4().hex
-
 # stop hypothesis from seeding our random
 r = Random(random.randint(0, int(1e10)))
 
@@ -110,6 +109,8 @@ def fuzz(f, *, start, mode, max_examples):
         st.floats(-10, 10),
         st.floats(allow_nan=False),
         st.floats(allow_infinity=False),
+        st.floats(min_value=1e308),
+        st.floats(max_value=-1e308),
         # bool
         st.booleans(),
         # composite / weird / other

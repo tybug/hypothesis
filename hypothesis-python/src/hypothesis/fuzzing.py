@@ -48,7 +48,12 @@ INT_SIZES           = (8,   16,  32,  64,  128)
 INT_SIZES_WEIGHTS   = (4.0, 8.0, 1.0, 1.0, 0.5)
 FLOAT_SIZES         = (8,   16,  32,  64,  128, 256, 512, 1024)
 FLOAT_SIZES_WEIGHTS = (4.0, 8.0, 1.0, 1.0, 0.5, 0.5, 0.5, 0.5)
+# if we've already chosen to truncate a float, this defines the probability
+# distribution over the number of digits to keep.
+FLOAT_TRUNCATION         = (0,   1,   2)
+FLOAT_TRUNCATION_WEIGHTS = (5.0, 2.0, 0.5)
 # fmt: on
+
 MAX_SERIALIZED_SIZE = BUFFER_SIZE
 # explicitly not thread-local so that the watchdog thread can access it
 data_to_draws_unsaved: Mapping[bytes, List["Draw"]] = LRUCache(
@@ -249,7 +254,7 @@ def mutate_float(
         (max_value - min_value) >= 300
         and not math.isinf(value)
         and not math.isnan(value)
-        and random.random() < 0.1
+        and random.random() < 0.15
     ):
 
         def random_value(min_point, max_point):
@@ -271,7 +276,37 @@ def mutate_float(
             smallest_nonzero_magnitude=smallest_nonzero_magnitude,
             random=random,
         )
+
+    # with moderate probability, truncate the float portion to between 0 and 2
+    # decimal places.
+    #
+    # I know we're dealing with *floats* here, not ints, but code which accepts
+    # floats often has special handling for when those floats are integers or
+    # close to it! The search space for many-decimaled-floats grows exponentially
+    # with the number of decimals, so finding anything special after a few decimals
+    # is a hopeless task. Of course, we still want to try some of those, but we
+    # should give up on anything more targeted there.
+    if random.random() < 0.4 and not math.isnan(forced) and not math.isinf(forced):
+        to = random.choices(FLOAT_TRUNCATION, FLOAT_TRUNCATION_WEIGHTS, k=1)[0]
+        truncated = float(f"{forced:.{to}f}")
+        if _permitted(
+            truncated,
+            min_value=min_value,
+            max_value=max_value,
+            allow_nan=allow_nan,
+            smallest_nonzero_magnitude=smallest_nonzero_magnitude,
+        ):
+            forced = truncated
+
     return forced
+
+
+def _permitted(f, *, min_value, max_value, allow_nan, smallest_nonzero_magnitude):
+    if math.isnan(f):
+        return allow_nan
+    if 0 < abs(f) < smallest_nonzero_magnitude:
+        return False
+    return sign_aware_lte(min_value, f) and sign_aware_lte(f, max_value)
 
 
 def _mutate_float(
@@ -279,13 +314,6 @@ def _mutate_float(
 ):
     def is_inf(value, *, sign):
         return math.copysign(1.0, value) == sign and math.isinf(value)
-
-    def permitted(f):
-        if math.isnan(f):
-            return allow_nan
-        if 0 < abs(f) < smallest_nonzero_magnitude:
-            return False
-        return sign_aware_lte(min_value, f) and sign_aware_lte(f, max_value)
 
     # draw a "nasty" value with probability 0.05. I think hypothesis uses 0.2,
     # but they have a significantly smaller budget and also count duplicates,
@@ -298,7 +326,17 @@ def _mutate_float(
         next_down(max_value),
         max_value,
     ]
-    nasty_floats = [f for f in NASTY_FLOATS + boundary_values if permitted(f)]
+    nasty_floats = [
+        f
+        for f in NASTY_FLOATS + boundary_values
+        if _permitted(
+            f,
+            min_value=min_value,
+            max_value=max_value,
+            allow_nan=allow_nan,
+            smallest_nonzero_magnitude=smallest_nonzero_magnitude,
+        )
+    ]
     if random.random() < 0.05 and nasty_floats:
         forced = random.choice(nasty_floats)
     else:
@@ -341,14 +379,6 @@ def _mutate_float(
             forced = random_float_between(
                 min_val, max_val, smallest_nonzero_magnitude, random=random
             )
-    # with probability 0.05, truncate to an integer-valued float
-    if (
-        random.random() < 0.05
-        and not math.isnan(forced)
-        and not math.isinf(forced)
-        and permitted(truncated := float(math.floor(forced)))
-    ):
-        forced = truncated
 
     return forced
 
