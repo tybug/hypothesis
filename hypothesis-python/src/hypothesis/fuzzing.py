@@ -44,8 +44,8 @@ from hypothesis.internal.floats import next_down, next_up, sign_aware_lte
 from hypothesis.internal.compat import int_from_bytes
 
 # fmt: off
-INT_SIZES           = (8,   16,  32,  64,  128)
-INT_SIZES_WEIGHTS   = (4.0, 8.0, 1.0, 1.0, 0.5)
+INT_SIZES           = (8,   13,  16,  32,  64,  128)
+INT_SIZES_WEIGHTS   = (4.0, 4.0, 8.0, 1.0, 1.0, 0.5)
 FLOAT_SIZES         = (8,   16,  32,  64,  128, 256, 512, 1024)
 FLOAT_SIZES_WEIGHTS = (4.0, 8.0, 1.0, 1.0, 0.5, 0.5, 0.5, 0.5)
 # if we've already chosen to truncate a float, this defines the probability
@@ -179,28 +179,33 @@ def _mutate_integer(*, min_value, max_value, random):
         assert max_value is not None
         # somewhat hodgepodge amalgamation of what hypothesis does for
         # weighting the size of bounded ints, and what I think works
-        # better for fuzzing (e.g. lowering the bit limit, decreasing the
-        # probability from 7/8 to 1/2).
+        # better for fuzzing (e.g. lowering the bit limit, maybe tweaking the
+        # probability from 7/8)
         bits = (max_value - min_value).bit_length()
-        if bits > 18 and random.random() < 0.5:
+        if bits > 13 and random.random() < (7 / 8):
             bits = min(bits, random.choices(INT_SIZES, INT_SIZES_WEIGHTS, k=1)[0])
             # TODO this would be faster with getrandbits
+            # rejection sample instead of clamp to avoid doing badly for ranges
+            # like (1, LARGE_INT) where origin 1 and we would clamp half of our
+            # values to min_value.
+            # see test_rf_info.py::test_addition for a manifestation, and
+            # test_visual_integers_with_positive_bounds for a visual test
             radius = 2 ** (bits - 1) - 1
-            forced = origin + random.randint(-radius, radius)
-            forced = clamp(min_value, forced, max_value)
+            forced = min_value - 1
+            while not (min_value <= forced <= max_value):
+                forced = origin + random.randint(-radius, radius)
         else:
             forced = random.randint(min_value, max_value)
 
         # right now we get integer endpoints for free because hypothesis draws
         # two integers for st.integers, one of which controls this endpoint.
         # once we roll that into a single call we'll need to introduce this.
-        # if (max_value - min_value > 300) and (r := random.randint(0, 100)) < 4:
-        #     forced = {
-        #         0: min_value,
-        #         1: min_value + 1,
-        #         2: max_value - 1,
-        #         3: max_value
-        #     }[r]
+        #
+        # me, later: I've enabled this for now because we're checking for the
+        # endpoint draw in NodeMutator and avoiding mutating it. which means
+        # we need this again.
+        if (max_value - min_value > 1_000) and (r := random.randint(0, 100)) < 4:
+            forced = {0: min_value, 1: min_value + 1, 2: max_value - 1, 3: max_value}[r]
     return forced
 
 
@@ -756,13 +761,29 @@ class NodeMutator(Mutator):
             draw = self.draws[i]
             ir_type = draw.ir_type
             kwargs: Any = draw.kwargs
+            cost = 1
             if ir_type == "integer":
-                value = mutate_integer(
-                    draw.value,
-                    min_value=kwargs["min_value"],
-                    max_value=kwargs["max_value"],
-                    random=random,
-                )
+                # unabashed hack to avoid mutating the (0, 127) draw which controls
+                # integer endpoints. this can significantly degrade performance
+                # for bounding single-int strategies.
+                if (
+                    kwargs["min_value"] == 0
+                    and kwargs["max_value"] == 127
+                    and i + 1 < len(self.draws)
+                    and (next_draw := self.draws[i + 1]).ir_type == "integer"
+                    and (next_min := next_draw.kwargs["min_value"]) is not None
+                    and (next_max := next_draw.kwargs["max_value"]) is not None
+                    and next_max - next_min > 127
+                ):
+                    value = draw.value
+                    cost = 0
+                else:
+                    value = mutate_integer(
+                        draw.value,
+                        min_value=kwargs["min_value"],
+                        max_value=kwargs["max_value"],
+                        random=random,
+                    )
             elif ir_type == "boolean":
                 value = mutate_boolean(draw.value, p=kwargs["p"])
             elif ir_type == "bytes":
@@ -794,15 +815,17 @@ class NodeMutator(Mutator):
 
             # print(f"{self.draws[i].value} |->| {value}")
             self.draws[i] = self.draws[i].copy(with_value=value)
+            return cost
 
         def mutate_nodes(indices):
+            cost = 0
             for i in indices:
-                mutate_node(i)
+                cost += mutate_node(i)
+            return cost
 
         i = self.random.choice(self.malleable_indices)
         if count == 1:
-            mutate_node(i)
-            return 1
+            return mutate_node(i)
 
         # TODO we'd like to expose these as "swarm options" eventually, and leave
         # it to our master algorithm to choose which one to enable or repeat. This
@@ -824,15 +847,15 @@ class NodeMutator(Mutator):
                 if self.draws[i].ir_type == chosen_ir_type
             ]
             count = min(count, len(possible_indices))
-            mutate_nodes(self.random.sample(possible_indices, k=count))
-            return count
+            return mutate_nodes(self.random.sample(possible_indices, k=count))
         else:
             # [i, end)
             end = min(i + count, len(self.malleable_indices))
             # avoid mutating forced nodes that may have been between sequential
             # malleable nodes
-            mutate_nodes(j for j in range(i, end) if self.draws[j].forced is None)
-            return count
+            return mutate_nodes(
+                j for j in range(i, end) if self.draws[j].forced is None
+            )
 
     @mutation(p=0.05)
     def delete_nodes(self, budget: int) -> int | object:

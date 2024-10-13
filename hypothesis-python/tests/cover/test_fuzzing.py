@@ -40,6 +40,7 @@ from tests.conjecture.common import draw_value, ir_types_and_kwargs
 MARKER = uuid.uuid4().hex
 # stop hypothesis from seeding our random
 r = Random(random.randint(0, int(1e10)))
+visual_tests = False
 
 
 @st.composite
@@ -490,3 +491,39 @@ def test_aligned_provider(draws):
         for draw in draws:
             v = getattr(data, f"draw_{draw.ir_type}")(**draw.kwargs)
             assert ir_value_equal(draw.ir_type, v, draw.value)
+
+
+def visual_test(strategies, *, start):
+    if not visual_tests:
+        pytest.skip("visual")
+
+    if not isinstance(strategies, list):
+        strategies = [strategies]
+
+    @st.composite
+    def s(draw):
+        return (draw(s) for s in strategies)
+
+    @given(s())
+    def f(args):
+        print(*args)
+
+    print("-" * 25, "atheris", "-" * 25)
+    fuzz(f, start=start, mode="atheris", max_examples=1000)
+    print("-" * 25, "baseline", "-" * 25)
+    fuzz(f, start=start, mode="baseline", max_examples=1000)
+
+
+def test_visual_floats():
+    visual_test([st.floats(), st.floats(), st.floats()], start=[0.0, 1.1, 2.2])
+
+
+def test_visual_integers_with_positive_bounds():
+    max_value = 2 ** 25
+    max_value = 999999999999
+    # first integer is the (0, 127) draw for bounds
+    visual_test(st.integers(1, max_value), start=[42, 100])
+
+
+def test_visual_strings():
+    visual_test(st.text(), start=["abcdefgh"])
