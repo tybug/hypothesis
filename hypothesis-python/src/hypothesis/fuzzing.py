@@ -462,7 +462,23 @@ def mutate_boolean(value, *, p):
 
 
 def mutate_bytes(value, *, min_size, max_size, random):
+    # TODO use the string trick to sometimes generate only 0 or only 255
+    # (and extract to some common logic with strings/bytes?)
     def draw_element():
+        # bias towards 0, 1, 254, 255 a cumulative 10% of the time. libfuzzer also
+        # upweights 0 and 255 but in less direct ways (eg only for InsertRepeatedBytes):
+        # https://github.com/llvm/llvm-project/blob/464a7ee79efda399c77f0009cc9d
+        # c0737d6e3c1e/compiler-rt/lib/fuzzer/FuzzerMutate.cpp#L155-L156
+        cum_p = 0.1
+        r = random.random()
+        if r < (cum_p / 4) * 1:
+            return 0
+        if r < (cum_p / 4) * 2:
+            return 1
+        if r < (cum_p / 4) * 3:
+            return 254
+        if r < (cum_p / 4) * 4:
+            return 255
         return random.randint(0, 255)
 
     return bytes(
@@ -985,6 +1001,13 @@ class CollectionMutator(Mutator):
         # print(f"swap interval {n1=} {n2=} {size1=} {size2=}")
         return max(size1, size2)
 
+    @mutation(p=0.2)
+    def move_interval(self, budget):
+        # move n1:n2 to n3. this is equivalent to swapping n1:n2 with n2:n3, but
+        # I'm guessing that moving an interval is sufficiently useful to specialize
+        # this mutation.
+        return self.DISABLED
+
     @mutation(p=0.5)
     def copy_interval(self, budget):
         # copy n1:n2 to n3:n4
@@ -1118,6 +1141,9 @@ def custom_mutator(data: bytes, *, random: Random, blackbox: bool) -> bytes:
     # print("HYPOTHESIS MUTATING FROM", data)
     t_start = time.time()
     statistics["num_calls"] += 1
+
+    if statistics["num_calls"] % 1000 == 0:
+        print(statistics["time_mutating"])
 
     stats = {}
 
@@ -1360,8 +1386,11 @@ def watch_directory_for_corpus(p: str | Path) -> None:
     observer.start()
 
 
-# NEXT:
-# * track statistics for the "lineage" of mutations. how many seeds are saved, how often are they mutated against?
-# * nested call test case: if a == 1 if b == 2 if c == 3 ... to ensure we aren't doing anything stupid with seed lineage or caching
-
-# TODO check if our coverage calculation is really only calculating the current lib
+# TODO track statistics for the "lineage" of mutations. how many seeds are saved, how often are they mutated from?
+# TODO when mutating booleans do we want to weight whether we change it by its p?
+#   otherwise we're going to truncate lists too often...? check if this actually happens
+#
+# TODO collect ir edit distance numbers (atheris, baseline (w/ ir), fuzz_one_input)
+# TODO can we defer to the libfuzzer .Mutate for string/byte?
+# TODO next use sql to report coverage against baseline and fuzz_one_input in analyze_fuzzing via a summary table
+# TODO manually examine collected failures (artifacts) and see what we find that fuzz_one_input doesn't, and vice versa. qualitative analysis for the paper

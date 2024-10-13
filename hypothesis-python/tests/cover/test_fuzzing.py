@@ -493,6 +493,26 @@ def test_aligned_provider(draws):
             assert ir_value_equal(draw.ir_type, v, draw.value)
 
 
+@given(st.lists(draws()))
+@example(
+    [
+        Draw(ir_type="boolean", kwargs={"p": 0.5}, value=True, forced=None),
+        Draw(
+            ir_type="integer",
+            kwargs={"min_value": 0, "max_value": 10},
+            value=5,
+            forced=None,
+        ),
+    ]
+)
+def test_provider_can_realign(draws):
+    data = ConjectureData(BUFFER_SIZE, b"", provider=AtherisProvider)
+    data.provider.buffer = ir_to_bytes([d.value for d in draws])
+
+    with data.provider.per_test_case_context_manager():
+        pass
+
+
 def visual_test(strategies, *, start):
     if not visual_tests:
         pytest.skip("visual")
