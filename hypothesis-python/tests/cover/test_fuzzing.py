@@ -539,7 +539,7 @@ def test_visual_floats():
 
 
 def test_visual_integers_with_positive_bounds():
-    max_value = 2 ** 25
+    max_value = 2**25
     max_value = 999999999999
     # first integer is the (0, 127) draw for bounds
     visual_test(st.integers(1, max_value), start=[42, 100])

@@ -232,7 +232,7 @@ def mutate_integer(value, *, min_value, max_value, random):
             and max_value is not None
             and (max_value - min_value) < 300
         )
-        and random.random() < 0.1
+        and random.random() < 0.15
     ):
 
         def random_value(min_point, max_point):
@@ -244,6 +244,8 @@ def mutate_integer(value, *, min_value, max_value, random):
             max_value=max_value,
             random_value=random_value,
         )
+    elif random.random() < 0.03:
+        forced = -value
     else:
         forced = _mutate_integer(
             min_value=min_value, max_value=max_value, random=random
@@ -255,6 +257,9 @@ def mutate_float(
     value, *, min_value, max_value, allow_nan, smallest_nonzero_magnitude, random
 ):
     # with some probability, draw in a small area around the previous value.
+    # TODO we should really extract this and mutate_integer to some NumericMutator,
+    # so it can benefit from nice @mutation probability distributions and the potential
+    # for combining mutations (eg mutate nearby and negate).
     if (
         (max_value - min_value) >= 300
         and not math.isinf(value)
@@ -273,6 +278,8 @@ def mutate_float(
             max_value=max_value,
             random_value=random_value,
         )
+    elif random.random() < 0.03:
+        forced = -value
     else:
         forced = _mutate_float(
             min_value=min_value,
@@ -289,8 +296,8 @@ def mutate_float(
     # floats often has special handling for when those floats are integers or
     # close to it! The search space for many-decimaled-floats grows exponentially
     # with the number of decimals, so finding anything special after a few decimals
-    # is a hopeless task. Of course, we still want to try some of those, but we
-    # should give up on anything more targeted there.
+    # is a hopeless task. Of course, we'll still want to try some floats with many
+    # decimal places.
     if random.random() < 0.4 and not math.isnan(forced) and not math.isinf(forced):
         to = random.choices(FLOAT_TRUNCATION, FLOAT_TRUNCATION_WEIGHTS, k=1)[0]
         truncated = float(f"{forced:.{to}f}")
@@ -321,7 +328,7 @@ def _mutate_float(
         return math.copysign(1.0, value) == sign and math.isinf(value)
 
     # draw a "nasty" value with probability 0.05. I think hypothesis uses 0.2,
-    # but they have a significantly smaller budget and also count duplicates,
+    # but they have a significantly smaller budget and also track duplicates,
     # so we should have a lower p.
     boundary_values = [
         min_value,
