@@ -816,7 +816,29 @@ class NodeMutator(Mutator):
                         random=random,
                     )
             elif ir_type == "boolean":
-                value = mutate_boolean(draw.value, p=kwargs["p"])
+                p = kwargs["p"]
+                # mutate a boolean in proportion with its bias. in english:
+                # * if unbiased (p=0.5), always mutate
+                # * if biased against the current value (e.g. p is small and the
+                #   current value is True), always mutate
+                # * if biased towards the current value (e.g. p is small and the
+                #   current value is False), mutate with probability 1 - bias.
+                #   This means that e.g. booleans with p=0.8 only mutate to False
+                #   20% of the time.
+                #
+                # All of this is somewhat more complicated than necessary, because
+                # the only case we currently care about is not mutating too many
+                # booleans which control the list size to False. These booleans
+                # tend to have high p (around 0.83).
+                bias = 0.5 + abs(0.5 - p)
+                biased_against = p < 0.5 if draw.value else p > 0.5
+                mutate = biased_against or self.random.random() > bias
+                if mutate:
+                    value = mutate_boolean(draw.value, p=p)
+                else:
+                    value = draw.value
+                    cost = 0
+
             elif ir_type == "bytes":
                 value = mutate_bytes(
                     draw.value,

@@ -547,3 +547,26 @@ def test_visual_integers_with_positive_bounds():
 
 def test_visual_strings():
     visual_test(st.text(), start=["abcdefgh"])
+
+
+def test_visual_lists():
+    visual_test(
+        st.lists(st.floats()),
+        start=[
+            True,
+            0.0,
+            True,
+            1.1,
+            True,
+            2.2,
+            True,
+            3.3,
+            True,
+            4.4,
+            True,
+            5.5,
+            True,
+            6.6,
+            False,
+        ],
+    )
