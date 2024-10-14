@@ -244,7 +244,11 @@ def mutate_integer(value, *, min_value, max_value, random):
             max_value=max_value,
             random_value=random_value,
         )
-    elif random.random() < 0.03:
+    elif (
+        random.random() < 0.03
+        and (min_value is not None and min_value <= -value)
+        and (max_value is not None and -value <= max_value)
+    ):
         forced = -value
     else:
         forced = _mutate_integer(
@@ -256,6 +260,16 @@ def mutate_integer(value, *, min_value, max_value, random):
 def mutate_float(
     value, *, min_value, max_value, allow_nan, smallest_nonzero_magnitude, random
 ):
+
+    def _is_permitted(v):
+        return _permitted(
+            v,
+            min_value=min_value,
+            max_value=max_value,
+            allow_nan=allow_nan,
+            smallest_nonzero_magnitude=smallest_nonzero_magnitude,
+        )
+
     # with some probability, draw in a small area around the previous value.
     # TODO we should really extract this and mutate_integer to some NumericMutator,
     # so it can benefit from nice @mutation probability distributions and the potential
@@ -278,7 +292,7 @@ def mutate_float(
             max_value=max_value,
             random_value=random_value,
         )
-    elif random.random() < 0.03:
+    elif random.random() < 0.03 and _is_permitted(-value):
         forced = -value
     else:
         forced = _mutate_float(
@@ -301,13 +315,7 @@ def mutate_float(
     if random.random() < 0.4 and not math.isnan(forced) and not math.isinf(forced):
         to = random.choices(FLOAT_TRUNCATION, FLOAT_TRUNCATION_WEIGHTS, k=1)[0]
         truncated = float(f"{forced:.{to}f}")
-        if _permitted(
-            truncated,
-            min_value=min_value,
-            max_value=max_value,
-            allow_nan=allow_nan,
-            smallest_nonzero_magnitude=smallest_nonzero_magnitude,
-        ):
+        if _is_permitted(truncated):
             forced = truncated
 
     return forced
