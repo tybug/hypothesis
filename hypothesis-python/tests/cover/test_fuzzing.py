@@ -208,6 +208,9 @@ def test_can_find_nearby_integers(target, offset, min_offset, max_offset):
     fuzz(f, start=start, mode="baseline", max_examples=1_000)
 
 
+# TODO add can_find_negated_value test for mutating n to -n for ints and floats
+
+
 @pytest.mark.parametrize(
     "target, offset",
     [
