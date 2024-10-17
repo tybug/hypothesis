@@ -154,9 +154,6 @@ _nonempty_and_content_names = (
 
 class TextStrategy(ListStrategy):
     def do_draw(self, data):
-        if not hypothesis.fuzzing.global_fuzzing_use_ir:
-            return "".join(super().do_draw(data))
-
         # if our element strategy is OneCharStringStrategy, we can skip the
         # ListStrategy draw and jump right to our nice IR string draw.
         # Doing so for user-provided element strategies is not correct in
@@ -355,14 +352,6 @@ class BytesStrategy(SearchStrategy):
         )
 
     def do_draw(self, data):
-        if not hypothesis.fuzzing.global_fuzzing_use_ir:
-            s = ListStrategy(
-                IntegersStrategy(0, 255), min_size=self.min_size, max_size=self.max_size
-            )
-            if self.min_size == self.max_size:
-                return bytes(data.draw_bytes(self.min_size, self.max_size))
-            return bytes(s.do_draw(data))
-
         return data.draw_bytes(self.min_size, self.max_size)
 
     _nonempty_filters = (
