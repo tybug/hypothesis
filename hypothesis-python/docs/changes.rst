@@ -18,6 +18,103 @@ Hypothesis 6.x
 
     .. include:: ../RELEASE.rst
 
+.. _v6.115.3:
+
+--------------------
+6.115.3 - 2024-10-16
+--------------------
+
+This patch fixes a regression from :ref:`version 6.115.2 <v6.115.2>` where generating values from :func:`~hypothesis.strategies.integers` with certain values for ``min_value`` and ``max_value`` would error.
+
+.. _v6.115.2:
+
+--------------------
+6.115.2 - 2024-10-14
+--------------------
+
+This release improves integer shrinking by folding the endpoint upweighting for :func:`~hypothesis.strategies.integers` into the ``weights`` parameter of our IR (:issue:`3921`).
+
+If you maintain an alternative backend as part of our (for now explicitly unstable) :ref:`alternative-backends`, this release changes the type of the ``weights`` parameter to ``draw_integer`` and may be a breaking change for you.
+
+.. _v6.115.1:
+
+--------------------
+6.115.1 - 2024-10-14
+--------------------
+
+This patch improves the performance of :func:`~hypothesis.strategies.from_type` with
+`pydantic.types.condate <https://docs.pydantic.dev/latest/api/types/#pydantic.types.condate>`__
+(:issue:`4000`).
+
+.. _v6.115.0:
+
+--------------------
+6.115.0 - 2024-10-12
+--------------------
+
+This improves the formatting of dataclasses and attrs classes when printing
+falsifying examples.
+
+.. _v6.114.1:
+
+--------------------
+6.114.1 - 2024-10-10
+--------------------
+
+This patch upgrades remaining type annotations to Python 3.9 syntax.
+
+.. _v6.114.0:
+
+--------------------
+6.114.0 - 2024-10-09
+--------------------
+
+This release drops support for Python 3.8, `which reached end of life on
+2024-10-07 <https://devguide.python.org/versions/>`__.
+
+.. _v6.113.0:
+
+--------------------
+6.113.0 - 2024-10-09
+--------------------
+
+This release adds ``hypothesis.errors.BackendCannotProceed``, an unstable API
+for use by :ref:`alternative-backends`.
+
+.. _v6.112.5:
+
+--------------------
+6.112.5 - 2024-10-08
+--------------------
+
+This release fixes a regression where :class:`hypothesis.stateful.Bundle` did not work properly with :ref:`flatmap <flatmap>` functionality (:issue:`4128`).
+
+.. _v6.112.4:
+
+--------------------
+6.112.4 - 2024-10-06
+--------------------
+
+This patch tweaks the paths in ``@example(...)`` patches, so that
+both ``git apply`` and ``patch`` will work by default.
+
+.. _v6.112.3:
+
+--------------------
+6.112.3 - 2024-10-05
+--------------------
+
+This release refactors internals of :class:`hypothesis.stateful.Bundle` to have a more consistent representation internally.
+
+.. _v6.112.2:
+
+--------------------
+6.112.2 - 2024-09-29
+--------------------
+
+This patch fixes an internal error when the ``__context__``
+attribute of a raised exception leads to a cycle (:issue:`4115`).
+
 .. _v6.112.1:
 
 --------------------
