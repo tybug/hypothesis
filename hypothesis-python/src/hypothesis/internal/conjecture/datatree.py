@@ -143,7 +143,7 @@ class Conclusion:
 # The one case where this may be detrimental is fuzzing, where the throughput of
 # examples is so high that it really may saturate important nodes. We'll cross
 # that bridge when we come to it.
-MAX_CHILDREN_EFFECTIVELY_INFINITE = 1_000_000
+MAX_CHILDREN_EFFECTIVELY_INFINITE = 100_000
 
 
 def _count_distinct_strings(*, alphabet_size, min_size, max_size):
