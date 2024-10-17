@@ -1637,9 +1637,9 @@ def given(
             if not (ran_explicit_examples or state.ever_executed):
                 raise SKIP_BECAUSE_NO_EXAMPLES
 
-        def _get_fuzz_target() -> (
-            Callable[[Union[bytes, bytearray, memoryview, BinaryIO]], Optional[bytes]]
-        ):
+        def _get_fuzz_target(
+            *, args=(), kwargs={}
+        ) -> Callable[[Union[bytes, bytearray, memoryview, BinaryIO]], Optional[bytes]]:
             # Because fuzzing interfaces are very performance-sensitive, we use a
             # somewhat more complicated structure here.  `_get_fuzz_target()` is
             # called by the `HypothesisHandle.fuzz_one_input` property, allowing
@@ -1655,10 +1655,8 @@ def given(
             )
             random = get_random_for_wrapped_test(test, wrapped_test)
             _args, _kwargs, stuff = process_arguments_to_given(
-                wrapped_test, (), {}, given_kwargs, new_signature.parameters
+                wrapped_test, args, kwargs, given_kwargs, new_signature.parameters
             )
-            assert not _args
-            assert not _kwargs
             state = StateForActualGivenExecution(
                 stuff, test, settings, random, wrapped_test
             )
