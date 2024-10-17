@@ -2020,7 +2020,7 @@ class ConjectureData:
         self.max_length = max_length
         self.is_find = False
         self.overdraw = 0
-        self.prefix = bytes(prefix)
+        self.__prefix = bytes(prefix)
         self.random = random
         self.provider = provider(self) if isinstance(provider, type) else provider
         assert isinstance(self.provider, PrimitiveProvider)
@@ -2653,9 +2653,9 @@ class ConjectureData:
 
         if forced is not None:
             buf = int_to_bytes(forced, n_bytes)
-        elif self._bytes_drawn < len(self.prefix):
+        elif self._bytes_drawn < len(self.__prefix):
             index = self._bytes_drawn
-            buf = self.prefix[index : index + n_bytes]
+            buf = self.__prefix[index : index + n_bytes]
             if len(buf) < n_bytes:
                 assert self.random is not None
                 buf += uniform(self.random, n_bytes - len(buf))
