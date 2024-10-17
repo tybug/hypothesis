@@ -1442,16 +1442,13 @@ class HypothesisHandle:
         try:
             return self.__cached_target  # type: ignore
         except AttributeError:
-            self.__cached_target = self._get_fuzz_target(args=(), kwargs={})
+            self.__cached_target = self._get_fuzz_target()
             return self.__cached_target
 
-    def fuzz_with_atheris(self, *, kwargs=None, corpus_dir=None, **_kwargs):
+    def fuzz_with_atheris(self, *, kwargs={}, corpus_dir=None, **_kwargs):
         import atheris
 
         from hypothesis.fuzzing import MAX_SERIALIZED_SIZE
-
-        if kwargs is None:
-            kwargs = {}
 
         # defaults to 4096 in libfuzzer. we're abusing the buffer to carry our
         # serialized ir, so we don't have an exact max_len <-> BUFFER_SIZE
@@ -1475,7 +1472,6 @@ class HypothesisHandle:
         argv += [f"-{k}={v}" for k, v in _kwargs.items()]
 
         fuzz_one_input = self._get_fuzz_target(
-            args=(),
             kwargs=kwargs,
             use_atheris=True,
         )
@@ -1786,7 +1782,7 @@ def given(
                 raise SKIP_BECAUSE_NO_EXAMPLES
 
         def _get_fuzz_target(
-            *, args, kwargs, use_atheris=False
+            *, args=(), kwargs={}, use_atheris=False
         ) -> Callable[[Union[bytes, bytearray, memoryview, BinaryIO]], Optional[bytes]]:
             # Because fuzzing interfaces are very performance-sensitive, we use a
             # somewhat more complicated structure here.  `_get_fuzz_target()` is
