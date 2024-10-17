@@ -196,13 +196,7 @@ def _mutate_integer(*, min_value, max_value, random):
         else:
             forced = random.randint(min_value, max_value)
 
-        # right now we get integer endpoints for free because hypothesis draws
-        # two integers for st.integers, one of which controls this endpoint.
-        # once we roll that into a single call we'll need to introduce this.
-        #
-        # me, later: I've enabled this for now because we're checking for the
-        # endpoint draw in NodeMutator and avoiding mutating it. which means
-        # we need this again.
+        # bias towards endpoints
         if (max_value - min_value > 1_000) and (r := random.randint(0, 100)) < 4:
             forced = {0: min_value, 1: min_value + 1, 2: max_value - 1, 3: max_value}[r]
     return forced
@@ -793,27 +787,12 @@ class NodeMutator(Mutator):
             kwargs: Any = draw.kwargs
             cost = 1
             if ir_type == "integer":
-                # unabashed hack to avoid mutating the (0, 127) draw which controls
-                # integer endpoints. this can significantly degrade performance
-                # for bounding single-int strategies.
-                if (
-                    kwargs["min_value"] == 0
-                    and kwargs["max_value"] == 127
-                    and i + 1 < len(self.draws)
-                    and (next_draw := self.draws[i + 1]).ir_type == "integer"
-                    and (next_min := next_draw.kwargs["min_value"]) is not None
-                    and (next_max := next_draw.kwargs["max_value"]) is not None
-                    and next_max - next_min > 127
-                ):
-                    value = draw.value
-                    cost = 0
-                else:
-                    value = mutate_integer(
-                        draw.value,
-                        min_value=kwargs["min_value"],
-                        max_value=kwargs["max_value"],
-                        random=random,
-                    )
+                value = mutate_integer(
+                    draw.value,
+                    min_value=kwargs["min_value"],
+                    max_value=kwargs["max_value"],
+                    random=random,
+                )
             elif ir_type == "boolean":
                 p = kwargs["p"]
                 # mutate a boolean in proportion with its bias. in english:
