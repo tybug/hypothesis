@@ -20,13 +20,13 @@ from hypothesis import assume, example, given, settings, strategies as st
 from hypothesis.core import BUFFER_SIZE
 from hypothesis.database import ir_to_bytes
 from hypothesis.fuzzing import (
+    SIZE_UNCAPPED,
     AtherisProvider,
+    CollectionMutator,
     Draw,
     NodeMutator,
-    CollectionMutator,
     custom_mutator,
     mutate_string,
-    SIZE_UNCAPPED,
 )
 from hypothesis.internal.conjecture.data import ConjectureData, ir_value_equal
 from hypothesis.internal.floats import next_down, next_up

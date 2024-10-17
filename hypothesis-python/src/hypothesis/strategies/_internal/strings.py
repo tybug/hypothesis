@@ -22,14 +22,12 @@ from hypothesis.internal.intervalsets import IntervalSet
 from hypothesis.internal.reflection import get_pretty_function_description
 from hypothesis.strategies._internal.collections import ListStrategy
 from hypothesis.strategies._internal.lazy import unwrap_strategies
-from hypothesis.strategies._internal.numbers import IntegersStrategy
 from hypothesis.strategies._internal.strategies import (
     OneOfStrategy,
     SampledFromStrategy,
     SearchStrategy,
 )
 from hypothesis.vendor.pretty import pretty
-import hypothesis
 
 
 # Cache size is limited by sys.maxunicode, but passing None makes it slightly faster.

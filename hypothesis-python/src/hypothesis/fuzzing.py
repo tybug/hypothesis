@@ -8,17 +8,18 @@
 # v. 2.0. If a copy of the MPL was not distributed with this file, You can
 # obtain one at https://mozilla.org/MPL/2.0/.
 
+import abc
 import inspect
 import math
 import random
 import time
+from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from random import Random
-from typing import Any, Callable, Dict, List, Mapping, TypedDict
-import abc
 from types import SimpleNamespace
+from typing import Any, Callable, TypedDict
 
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
@@ -27,6 +28,7 @@ from hypothesis.database import ir_from_bytes, ir_to_bytes
 from hypothesis.errors import StopTest
 from hypothesis.internal import floats as flt
 from hypothesis.internal.cache import LRUCache
+from hypothesis.internal.compat import int_from_bytes
 from hypothesis.internal.conjecture.data import (
     COLLECTION_DEFAULT_MAX_SIZE,
     NASTY_FLOATS,
@@ -41,7 +43,6 @@ from hypothesis.internal.conjecture.data import (
 from hypothesis.internal.conjecture.engine import BUFFER_SIZE
 from hypothesis.internal.conjecture.junkdrawer import clamp
 from hypothesis.internal.floats import next_down, next_up, sign_aware_lte
-from hypothesis.internal.compat import int_from_bytes
 
 # fmt: off
 INT_SIZES           = (8,   13,  16,  32,  64,  128)
@@ -56,11 +57,11 @@ FLOAT_TRUNCATION_WEIGHTS = (5.0, 2.0, 0.5)
 
 MAX_SERIALIZED_SIZE = BUFFER_SIZE
 # explicitly not thread-local so that the watchdog thread can access it
-data_to_draws_unsaved: Mapping[bytes, List["Draw"]] = LRUCache(
+data_to_draws_unsaved: Mapping[bytes, list["Draw"]] = LRUCache(
     15_000, threadlocal=False
 )
 # stores bounds for interesting / actual corpus data. unbounded
-data_to_draws: Dict[bytes, List["Draw"]] = {}
+data_to_draws: dict[bytes, list["Draw"]] = {}
 
 
 class Statistics(TypedDict):
@@ -507,7 +508,7 @@ def _custom_mutator(data, buffer_size, seed):
     return custom_mutator(data, random=Random(), blackbox=True)
 
 
-def _get_draws_from_cache(buffer: bytes) -> List["Draw"] | None:
+def _get_draws_from_cache(buffer: bytes) -> list["Draw"] | None:
     try:
         return data_to_draws[buffer]
     except KeyError:
@@ -561,7 +562,7 @@ class MutationMessage(TypedDict):
 class Mutator:
     DISABLED = object()
     # class-level variable set by subclasses
-    mutations: List[Mutation] = []
+    mutations: list[Mutation] = []
 
     def __init__(self, *, total_cost: int, random: Random):
         self.total_cost = total_cost
@@ -1360,7 +1361,7 @@ class AtherisProvider(PrimitiveProvider):
         # print("HYPOTHESIS ATHERISPROVIDER DRAWS_PREFIX", self.draws_prefix)
         self.draws_index: int = 0
         self.serialized_size: int = 0
-        self.draws: List[Draw] = []
+        self.draws: list[Draw] = []
         # deterministic generation relative to the buffer, for replaying failures.
         self.random = Random(self.buffer)
 
