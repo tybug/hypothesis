@@ -1410,3 +1410,4 @@ def watch_directory_for_corpus(p: str | Path) -> None:
 # TODO can we defer to the libfuzzer .Mutate for string/byte?
 # TODO next use sql to report coverage against baseline and fuzz_one_input in analyze_fuzzing via a summary table
 # TODO manually examine collected failures (artifacts) and see what we find that fuzz_one_input doesn't, and vice versa. qualitative analysis for the paper
+# TODO mutation pass which (swaps or replaces) the value of an integer and float node (randomly rounded up/down in the float case)
