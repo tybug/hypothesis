@@ -100,9 +100,9 @@ def test_cached_with_masked_byte_agrees_with_results(byte_a, byte_b):
 
 
 def test_node_programs_fail_efficiently(monkeypatch):
-    # Create 256 byte-sized blocks. None of the blocks can be deleted, and
+    # Create 256 byte-sized nodes. None of the nodes can be deleted, and
     # every deletion attempt produces a different buffer.
-    @shrinking_from(bytes(range(256)))
+    @shrinking_from(ir(0) * 256)
     def shrinker(data: ConjectureData):
         values = set()
         for _ in range(256):
@@ -114,15 +114,12 @@ def test_node_programs_fail_efficiently(monkeypatch):
     monkeypatch.setattr(
         Shrinker, "run_node_program", counts_calls(Shrinker.run_node_program)
     )
-
     shrinker.max_stall = 500
-
     shrinker.fixate_shrink_passes([node_program("XX")])
 
     assert shrinker.shrinks == 0
     assert 250 <= shrinker.calls <= 260
-
-    # The block program should have been run roughly 255 times, with a little
+    # The node program should have been run roughly 255 times, with a little
     # bit of wiggle room for implementation details.
     #   - Too many calls mean that failing steps are doing too much work.
     #   - Too few calls mean that this test is probably miscounting and buggy.

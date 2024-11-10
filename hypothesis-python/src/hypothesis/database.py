@@ -700,7 +700,7 @@ def ir_to_bytes(ir: Iterable[IRType], /) -> bytes:
         elif isinstance(elem, bytes):
             tag = 3 << 5
         else:
-            assert isinstance(elem, str)
+            assert isinstance(elem, str), elem
             tag = 4 << 5
             elem = elem.encode(errors="surrogatepass")
 

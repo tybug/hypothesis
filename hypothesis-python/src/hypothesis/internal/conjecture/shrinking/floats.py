@@ -14,8 +14,7 @@ import sys
 from hypothesis.internal.conjecture.floats import float_to_lex
 from hypothesis.internal.conjecture.shrinking.common import Shrinker
 from hypothesis.internal.conjecture.shrinking.integer import Integer
-
-MAX_PRECISE_INTEGER = 2**53
+from hypothesis.internal.floats import MAX_PRECISE_INTEGER
 
 
 class Float(Shrinker):
@@ -92,4 +91,4 @@ class Float(Shrinker):
         # k as an integer, but without the precision issues that would have.
         m, n = self.current.as_integer_ratio()
         i, r = divmod(m, n)
-        self.call_shrinker(Integer, i, lambda k: self.consider((k * n + r) / n))
+        Integer.shrink(i, lambda k: self.consider((k * n + r) / n))

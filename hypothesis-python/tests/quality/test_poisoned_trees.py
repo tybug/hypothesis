@@ -17,7 +17,6 @@ from hypothesis.internal.conjecture.engine import ConjectureData, ConjectureRunn
 from hypothesis.strategies._internal import SearchStrategy
 
 POISON = "POISON"
-
 MAX_INT = 2**32 - 1
 
 
@@ -49,13 +48,10 @@ class PoisonedTree(SearchStrategy):
                 return (None,)
 
 
-LOTS = 10**6
-
-
 TEST_SETTINGS = settings(
     database=None,
     suppress_health_check=list(HealthCheck),
-    max_examples=LOTS,
+    max_examples=10**6,
     deadline=None,
 )
 
@@ -85,7 +81,6 @@ def test_can_reduce_poison_from_any_subtree(size, seed):
 
     runner.generate_new_examples()
     runner.shrink_interesting_examples()
-
     (data,) = runner.interesting_examples.values()
 
     assert len(ConjectureData.for_buffer(data.buffer).draw(strat)) == size
@@ -110,14 +105,11 @@ def test_can_reduce_poison_from_any_subtree(size, seed):
         runner = ConjectureRunner(
             test_function_with_poison, random=random, settings=TEST_SETTINGS
         )
-
         runner.cached_test_function(
             data.buffer[:u] + bytes([255]) * 4 + data.buffer[u + 4 :] + marker
         )
 
         assert runner.interesting_examples
         runner.shrink_interesting_examples()
-
         (shrunk,) = runner.interesting_examples.values()
-
         assert ConjectureData.for_buffer(shrunk.buffer).draw(strat) == (POISON,)

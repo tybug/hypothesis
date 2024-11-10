@@ -396,11 +396,9 @@ def test_does_not_save_on_interrupt():
         raise KeyboardInterrupt
 
     db = InMemoryExampleDatabase()
-
     runner = ConjectureRunner(
         interrupts, settings=settings(database=db), database_key=b"key"
     )
-
     with pytest.raises(KeyboardInterrupt):
         runner.run()
     assert not db.data
@@ -1527,19 +1525,6 @@ def test_does_not_cache_extended_prefix_if_overrun():
         assert d2.status == Status.VALID
 
 
-def test_draw_bits_partly_from_prefix_and_partly_random():
-    # a draw_bits call which straddles the end of our prefix has a slightly
-    # different code branch.
-    def test(data):
-        # float consumes draw_bits(64)
-        data.draw_float()
-
-    with deterministic_PRNG():
-        runner = ConjectureRunner(test, settings=TEST_SETTINGS)
-        d = runner.cached_test_function(bytes(10), extend=100)
-        assert d.status == Status.VALID
-
-
 def test_can_be_set_to_ignore_limits():
     def test(data):
         data.draw_bytes(1, 1)
@@ -1668,7 +1653,7 @@ def test_simulate_to_evicted_data(monkeypatch):
 
     # we dont throw PreviouslyUnseenBehavior when simulating, but the result
     # was evicted to the cache so we will still call through to the test function.
-    runner.tree.simulate_test_function(ConjectureData.for_ir_tree([node_0]))
+    runner.tree.simulate_test_function(ConjectureData.for_ir([node_0]))
     runner.cached_test_function_ir([node_0])
     assert runner.call_count == 3
 

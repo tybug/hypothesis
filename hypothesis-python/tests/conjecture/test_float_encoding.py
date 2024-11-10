@@ -15,11 +15,10 @@ import pytest
 from hypothesis import HealthCheck, assume, example, given, settings, strategies as st
 from hypothesis.internal.compat import ceil, extract_bits, floor, int_to_bytes
 from hypothesis.internal.conjecture import floats as flt
-from hypothesis.internal.conjecture.data import ConjectureData
 from hypothesis.internal.conjecture.engine import ConjectureRunner
 from hypothesis.internal.floats import float_to_int
 
-from tests.conjecture.common import run_to_buffer
+from tests.conjecture.common import ir
 
 EXPONENTS = list(range(flt.MAX_EXPONENT + 1))
 assert len(EXPONENTS) == 2**11
@@ -124,34 +123,25 @@ def test_reverse_bits_table_has_right_elements():
 
 
 def float_runner(start, condition, *, kwargs=None):
-    kwargs = {} if kwargs is None else kwargs
-
-    @run_to_buffer
-    def buf(data):
-        data.draw_float(forced=start, **kwargs)
-        data.mark_interesting()
 
     def test_function(data):
-        f = data.draw_float(**kwargs)
+        f = data.draw_float(**({} if kwargs is None else kwargs))
         if condition(f):
             data.mark_interesting()
 
     runner = ConjectureRunner(test_function)
-    runner.cached_test_function(buf)
+    runner.cached_test_function_ir(ir((start, kwargs)))
     assert runner.interesting_examples
     return runner
 
 
 def minimal_from(start, condition, *, kwargs=None):
-    kwargs = {} if kwargs is None else kwargs
-
     runner = float_runner(start, condition, kwargs=kwargs)
     runner.shrink_interesting_examples()
     (v,) = runner.interesting_examples.values()
-    data = ConjectureData.for_buffer(v.buffer)
-    result = data.draw_float(**kwargs)
-    assert condition(result)
-    return result
+    f = v.examples.ir_tree_nodes[0].value
+    assert condition(f)
+    return f
 
 
 INTERESTING_FLOATS = [0.0, 1.0, 2.0, sys.float_info.max, float("inf"), float("nan")]

@@ -14,13 +14,22 @@ from copy import deepcopy
 
 import pytest
 
-from hypothesis import HealthCheck, assume, example, given, settings, strategies as st
+from hypothesis import (
+    HealthCheck,
+    assume,
+    example,
+    given,
+    note,
+    settings,
+    strategies as st,
+)
 from hypothesis.errors import StopTest
 from hypothesis.internal.conjecture.data import (
     COLLECTION_DEFAULT_MAX_SIZE,
     ConjectureData,
     IRNode,
     Status,
+    ir_ordering,
     ir_value_equal,
     ir_value_permitted,
 )
@@ -35,12 +44,16 @@ from hypothesis.internal.intervalsets import IntervalSet
 
 from tests.common.debug import minimal
 from tests.conjecture.common import (
+    clamped_shrink_towards,
     draw_value,
     fresh_data,
     integer_kwargs,
     ir_nodes,
     ir_types_and_kwargs,
 )
+
+# drop this when we support weights in ordering
+ir_ordering_kwargs = {"integer": {"use_weights": False}}
 
 
 # we max out at 128 bit integers in the *unbounded* case, but someone may
@@ -269,18 +282,19 @@ def test_draw_string_single_interval_with_equal_bounds(s, n):
 @example(
     ("float", {"min_value": 1.0, "max_value": 2.0, "smallest_nonzero_magnitude": 3.0})
 )
-@example(
-    (
-        "integer",
-        {
-            "min_value": 1,
-            "max_value": 2,
-            "weights": {1: 0.2, 2: 0.4},
-            "shrink_towards": 0,
-        },
-    )
-)
-@given(ir_types_and_kwargs())
+# restore when removing ir_ordering_kwargs
+# @example(
+#     (
+#         "integer",
+#         {
+#             "min_value": 1,
+#             "max_value": 2,
+#             "weights": [0, 1],
+#             "shrink_towards": 0,
+#         },
+#     )
+# )
+@given(ir_types_and_kwargs(ir_ordering_kwargs))
 @settings(suppress_health_check=[HealthCheck.filter_too_much])
 def test_compute_max_children_and_all_children_agree(ir_type_and_kwargs):
     (ir_type, kwargs) = ir_type_and_kwargs
@@ -301,21 +315,9 @@ def test_compute_max_children_and_all_children_agree(ir_type_and_kwargs):
 # element is what we expect.
 
 
-@given(integer_kwargs())
-def test_compute_max_children_integer_ranges(kwargs):
-    if kwargs["weights"] is not None:
-        # this case is in principle testable. would need to takewhile from all_children
-        # while weight is not zero.
-        assume(all(v > 0 for v in kwargs["weights"]))
-    if kwargs["min_value"] is not None:
-        expected = kwargs["min_value"]
-    else:
-        offset = (
-            0
-            if kwargs["max_value"] is None
-            else min(kwargs["max_value"], kwargs["shrink_towards"])
-        )
-        expected = offset - (2**127) + 1
+@given(integer_kwargs(**ir_ordering_kwargs["integer"]))
+def test_compute_max_children_unbounded_integer_ranges(kwargs):
+    expected = clamped_shrink_towards(kwargs)
     first = next(all_children("integer", kwargs))
     assert expected == first, (expected, first)
 
@@ -409,7 +411,7 @@ def test_cannot_modify_forced_nodes(node):
 
 
 def test_data_with_empty_ir_tree_is_overrun():
-    data = ConjectureData.for_ir_tree([])
+    data = ConjectureData.for_ir([])
     with pytest.raises(StopTest):
         data.draw_integer()
 
@@ -425,7 +427,7 @@ def test_data_with_changed_forced_value(node):
     # This is actually fine; we'll just ignore the forced node (v1) and return
     # what the draw expects (v2).
 
-    data = ConjectureData.for_ir_tree([node], max_length=BUFFER_SIZE_IR)
+    data = ConjectureData.for_ir([node], max_length=BUFFER_SIZE_IR)
 
     draw_func = getattr(data, f"draw_{node.ir_type}")
     kwargs = deepcopy(node.kwargs)
@@ -496,7 +498,7 @@ def test_data_with_same_forced_value_is_valid(node):
     # fine!
     # ir tree: v1 [was_forced=True]
     # drawing:    [forced=v1]
-    data = ConjectureData.for_ir_tree([node])
+    data = ConjectureData.for_ir([node])
     draw_func = getattr(data, f"draw_{node.ir_type}")
 
     kwargs = deepcopy(node.kwargs)
@@ -504,7 +506,7 @@ def test_data_with_same_forced_value_is_valid(node):
     assert ir_value_equal(node.ir_type, draw_func(**kwargs), kwargs["forced"])
 
 
-@given(ir_types_and_kwargs())
+@given(ir_types_and_kwargs(ir_ordering_kwargs))
 @settings(suppress_health_check=[HealthCheck.filter_too_much])
 def test_all_children_are_permitted_values(ir_type_and_kwargs):
     (ir_type, kwargs) = ir_type_and_kwargs
@@ -970,3 +972,159 @@ def test_conservative_nontrivial_nodes(node):
 @given(ir_nodes())
 def test_ir_node_is_hashable(ir_node):
     hash(ir_node)
+
+
+from hypothesis.internal.conjecture.datatree import supported
+
+
+@given(ir_types_and_kwargs(ir_ordering_kwargs))
+@settings(suppress_health_check=list(HealthCheck))
+@example(("boolean", {"p": 0}))
+@example(("boolean", {"p": 1}))
+def test_ir_ordering_index_stays_within_bounds(ir_type_and_kwargs):
+    (ir_type, kwargs) = ir_type_and_kwargs
+
+    max_children = compute_max_children(ir_type, kwargs)
+    cap = min(100_000, MAX_CHILDREN_EFFECTIVELY_INFINITE)
+    assume(max_children < cap)
+    assume(ir_type in supported)
+
+    v = draw_value(ir_type, kwargs)
+    note({"v": v})
+    index = ir_ordering(ir_type, kwargs, v, to="index")
+    assert 0 <= index < max_children
+
+
+@given(st.data())
+def test_ir_ordering_shrink_towards_has_index_0(data):
+    kwargs = data.draw(integer_kwargs(**ir_ordering_kwargs["integer"]))
+    shrink_towards = clamped_shrink_towards(kwargs)
+    note({"clamped_shrink_towards": shrink_towards})
+    assert ir_ordering("integer", kwargs, shrink_towards, to="index") == 0
+
+
+@given(ir_types_and_kwargs(ir_ordering_kwargs))
+@settings(suppress_health_check=list(HealthCheck))
+def test_ir_ordering_injective_to_index(ir_type_and_kwargs):
+    # ir ordering should be injective both ways, ie no duplicates.
+    (ir_type, kwargs) = ir_type_and_kwargs
+
+    # cap for efficiency
+    max_children = compute_max_children(ir_type, kwargs)
+    cap = min(max_children, 100_000, MAX_CHILDREN_EFFECTIVELY_INFINITE)
+    assume(ir_type in supported)
+
+    indices = set()
+    for i, value in enumerate(all_children(ir_type, kwargs)):
+        if i >= cap:
+            break
+        index = ir_ordering(ir_type, kwargs, value, to="index")
+        assert index not in indices
+        indices.add(index)
+
+
+@given(ir_types_and_kwargs(ir_ordering_kwargs))
+@example(
+    (
+        "string",
+        {"min_size": 0, "max_size": 10, "intervals": IntervalSet.from_string("a")},
+    )
+)
+@settings(suppress_health_check=list(HealthCheck))
+def test_ir_ordering_injective_to_value(ir_type_and_kwargs):
+    (ir_type, kwargs) = ir_type_and_kwargs
+    max_children = compute_max_children(ir_type, kwargs)
+    cap = min(100_000, MAX_CHILDREN_EFFECTIVELY_INFINITE, max_children)
+    assume(ir_type in supported)
+
+    values = set()
+    for index in range(cap):
+        value = ir_ordering(ir_type, kwargs, index, to="value")
+        assert value not in values
+        values.add(value)
+
+
+@given(ir_types_and_kwargs(ir_ordering_kwargs))
+@settings(suppress_health_check=list(HealthCheck))
+def test_ir_ordering_index_and_value_are_inverses(ir_type_and_kwargs):
+    (ir_type, kwargs) = ir_type_and_kwargs
+    assume(ir_type in supported)
+    v = draw_value(ir_type, kwargs)
+    index = ir_ordering(ir_type, kwargs, v, to="index")
+    note({"v": v, "index": index})
+    assert ir_ordering(ir_type, kwargs, index, to="value") == v
+
+
+@pytest.mark.parametrize(
+    "ir_type, kwargs, range",
+    [
+        (
+            "integer",
+            {
+                "min_value": 1,
+                "max_value": None,
+                "shrink_towards": 4,
+                "weights": None,
+                "forced": None,
+            },
+            range(1, 10),
+        ),
+        (
+            "integer",
+            {
+                "min_value": None,
+                "max_value": 5,
+                "shrink_towards": 2,
+                "weights": None,
+                "forced": None,
+            },
+            range(-10, 5 + 1),
+        ),
+        (
+            "integer",
+            {
+                "min_value": None,
+                "max_value": 5,
+                "shrink_towards": 0,
+                "weights": None,
+                "forced": None,
+            },
+            range(-10, 5 + 1),
+        ),
+        (
+            "integer",
+            {
+                "min_value": 0,
+                "max_value": None,
+                "shrink_towards": 1,
+                "weights": None,
+                "forced": None,
+            },
+            range(10),
+        ),
+        (
+            "float",
+            {
+                "min_value": 1.0,
+                "max_value": next_up(next_up(1.0)),
+                "allow_nan": True,
+                "smallest_nonzero_magnitude": SMALLEST_SUBNORMAL,
+            },
+            [1.0, next_up(1.0), next_up(next_up(1.0))],
+        ),
+        (
+            "float",
+            {
+                "min_value": next_down(-0.0),
+                "max_value": next_up(0.0),
+                "allow_nan": True,
+                "smallest_nonzero_magnitude": SMALLEST_SUBNORMAL,
+            },
+            [next_down(-0.0), -0.0, 0.0, next_up(0.0)],
+        ),
+    ],
+)
+def test_ir_ordering_inverses_explicit(ir_type, kwargs, range):
+    for v in range:
+        index = ir_ordering(ir_type, kwargs, v, to="index")
+        assert ir_ordering(ir_type, kwargs, index, to="value") == v

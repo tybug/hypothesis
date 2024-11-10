@@ -35,7 +35,7 @@ import attr
 
 from hypothesis import HealthCheck, Phase, Verbosity, settings as Settings
 from hypothesis._settings import local_settings
-from hypothesis.database import ExampleDatabase
+from hypothesis.database import ExampleDatabase, ir_from_bytes
 from hypothesis.errors import (
     BackendCannotProceed,
     FlakyReplay,
@@ -54,6 +54,7 @@ from hypothesis.internal.conjecture.data import (
     InterestingOrigin,
     IRKWargsType,
     IRNode,
+    IRType,
     Overrun,
     PrimitiveProvider,
     Status,
@@ -167,6 +168,13 @@ def _get_provider(backend: str) -> Union[type, PrimitiveProvider]:
             f"invalid lifetime {provider_cls.lifetime} for provider {provider_cls.__name__}. "
             "Expected one of 'test_function', 'test_case'."
         )
+
+
+def ir_complexity(ir_nodes):
+    complexity = 0
+    for node in ir_nodes:
+        complexity += 1
+    return complexity
 
 
 class CallStats(TypedDict):
@@ -349,26 +357,8 @@ class ConjectureRunner:
 
     def _cache(self, data: ConjectureData) -> None:
         result = data.as_result()
-        self.__data_cache[data.buffer] = result
-
-        # interesting buffer-based data can mislead the shrinker if we cache them.
-        #
-        #   @given(st.integers())
-        #   def f(n):
-        #     assert n < 100
-        #
-        # may generate two counterexamples, n=101 and n=m > 101, in that order,
-        # where the buffer corresponding to n is large due to eg failed probes.
-        # We shrink m and eventually try n=101, but it is cached to a large buffer
-        # and so the best we can do is n=102, a non-ideal shrink.
-        #
-        # We can cache ir-based buffers fine, which always correspond to the
-        # smallest buffer via forced=. The overhead here is small because almost
-        # all interesting data are ir-based via the shrinker (and that overhead
-        # will tend towards zero as we move generation to the ir).
-        if data.ir_tree_nodes is not None or data.status < Status.INTERESTING:
-            key = self._cache_key_ir(data=data)
-            self.__data_cache_ir[key] = result
+        key = self._cache_key_ir(data=data)
+        self.__data_cache_ir[key] = result
 
     def cached_test_function_ir(
         self,
@@ -377,6 +367,14 @@ class ConjectureRunner:
         error_on_discard: bool = False,
         extend: int = 0,
     ) -> Union[ConjectureResult, _Overrun]:
+        """
+        If ``error_on_discard`` is set to True this will raise ``ContainsDiscard``
+        in preference to running the actual test function. This is to allow us
+        to skip test cases we expect to be redundant in some cases. Note that
+        it may be the case that we don't raise ``ContainsDiscard`` even if the
+        result has discards if we cannot determine from previous runs whether
+        it will have a discard.
+        """
         key = self._cache_key_ir(nodes=nodes)
         try:
             cached = self.__data_cache_ir[key]
@@ -507,7 +505,7 @@ class ConjectureRunner:
         ):
             self.save_buffer(data.buffer, sub_key=b"pareto")
 
-        assert len(data.buffer) <= BUFFER_SIZE
+        assert len(data.examples.ir_tree_nodes) <= BUFFER_SIZE_IR
 
         if data.status >= Status.VALID:
             for k, v in data.target_observations.items():
@@ -532,23 +530,23 @@ class ConjectureRunner:
                     assert not isinstance(data_as_result, _Overrun)
                     self.best_examples_of_observed_targets[k] = data_as_result
 
-        if data.status == Status.VALID:
+        if data.status is Status.VALID:
             self.valid_examples += 1
 
-        if data.status == Status.INTERESTING:
+        if data.status is Status.INTERESTING:
             if self.settings.backend != "hypothesis":
-                # drive the ir tree through the test function to convert it
-                # to a buffer
+                # replay this failure on the hypothesis backend to ensure it still
+                # finds a failure. otherwise, it is flaky.
                 initial_origin = data.interesting_origin
                 initial_traceback = getattr(
                     data.extra_information, "_expected_traceback", None
                 )
-                data = ConjectureData.for_ir_tree(data.examples.ir_tree_nodes)
+                data = ConjectureData.for_ir(data.examples.ir_tree_nodes)
                 self.__stoppable_test_function(data)
                 data.freeze()
                 # TODO: Convert to FlakyFailure on the way out. Should same-origin
                 #       also be checked?
-                if data.status != Status.INTERESTING:
+                if data.status is not Status.INTERESTING:
                     desc_new_status = {
                         data.status.VALID: "passed",
                         data.status.INVALID: "failed filters",
@@ -632,7 +630,7 @@ class ConjectureRunner:
     def on_pareto_evict(self, data: ConjectureData) -> None:
         self.settings.database.delete(self.pareto_key, data.buffer)
 
-    def generate_novel_prefix(self) -> bytes:
+    def generate_novel_prefix(self) -> list[IRNode]:
         """Uses the tree to proactively generate a starting sequence of bytes
         that we haven't explored yet for this test.
 
@@ -829,7 +827,8 @@ class ConjectureRunner:
                 corpus.extend(extra)
 
             for existing in corpus:
-                data = self.cached_test_function(existing, extend=BUFFER_SIZE)
+                ir = ir_from_bytes(existing)
+                data = self.cached_test_function_ir(ir, extend=BUFFER_SIZE)
                 if data.status != Status.INTERESTING:
                     self.settings.database.delete(self.database_key, existing)
                     self.settings.database.delete(self.secondary_key, existing)
@@ -992,16 +991,14 @@ class ConjectureRunner:
 
             self._current_phase = "generate"
             prefix = self.generate_novel_prefix()
-            # it is possible, if unlikely, to generate a > BUFFER_SIZE novel prefix,
-            # as nodes in the novel tree may be variable sized due to eg integer
-            # probe retries.
-            prefix = prefix[:BUFFER_SIZE]
             if (
                 self.valid_examples <= small_example_cap
                 and self.call_count <= 5 * small_example_cap
                 and not self.interesting_examples
                 and consecutive_zero_extend_is_invalid < 5
+                and False
             ):
+                # TODO need a way to say "fill with simplest ir values"
                 minimal_example = self.cached_test_function(
                     prefix + bytes(BUFFER_SIZE - len(prefix))
                 )
@@ -1053,8 +1050,7 @@ class ConjectureRunner:
             else:
                 max_length = BUFFER_SIZE
 
-            data = self.new_conjecture_data(prefix=prefix, max_length=max_length)
-
+            data = self.new_conjecture_data_ir(prefix, max_length=max_length)
             self.test_function(data)
 
             if (
@@ -1249,7 +1245,7 @@ class ConjectureRunner:
 
     def new_conjecture_data_ir(
         self,
-        ir_tree_prefix: Sequence[IRNode],
+        ir_prefix: Sequence[IRNode] | Sequence[IRType],
         *,
         observer: Optional[DataObserver] = None,
         max_length: Optional[int] = None,
@@ -1261,8 +1257,12 @@ class ConjectureRunner:
         if self.settings.backend != "hypothesis":
             observer = DataObserver()
 
-        return ConjectureData.for_ir_tree(
-            ir_tree_prefix,
+        return ConjectureData.for_ir(
+            (
+                ir_prefix
+                if len(ir_prefix) == 0 or isinstance(ir_prefix[0], IRNode)
+                else [n.value for n in ir_prefix]
+            ),
             observer=observer,
             provider=provider,
             max_length=max_length,
@@ -1411,13 +1411,6 @@ class ConjectureRunner:
 
         Otherwise we call through to ``test_function``, and return a
         fresh result.
-
-        If ``error_on_discard`` is set to True this will raise ``ContainsDiscard``
-        in preference to running the actual test function. This is to allow us
-        to skip test cases we expect to be redundant in some cases. Note that
-        it may be the case that we don't raise ``ContainsDiscard`` even if the
-        result has discards if we cannot determine from previous runs whether
-        it will have a discard.
         """
         buffer = bytes(buffer)[:BUFFER_SIZE]
 

@@ -8,9 +8,9 @@
 # v. 2.0. If a copy of the MPL was not distributed with this file, You can
 # obtain one at https://mozilla.org/MPL/2.0/.
 
-import itertools
 import math
-from typing import Optional, Union
+from random import Random
+from typing import TYPE_CHECKING, Optional, Union
 
 import attr
 
@@ -21,7 +21,6 @@ from hypothesis.errors import (
     StopTest,
 )
 from hypothesis.internal import floats as flt
-from hypothesis.internal.compat import int_to_bytes
 from hypothesis.internal.conjecture.data import (
     BooleanKWargs,
     BytesKWargs,
@@ -34,6 +33,7 @@ from hypothesis.internal.conjecture.data import (
     IRTypeName,
     Status,
     StringKWargs,
+    ir_ordering,
 )
 from hypothesis.internal.escalation import InterestingOrigin
 from hypothesis.internal.floats import (
@@ -42,6 +42,9 @@ from hypothesis.internal.floats import (
     int_to_float,
     sign_aware_lte,
 )
+
+if TYPE_CHECKING:
+    from hypothesis.internal.conjecture.data import IRNode
 
 
 class PreviouslyUnseenBehaviour(HypothesisException):
@@ -258,53 +261,15 @@ def compute_max_children(ir_type, kwargs):
 # reasons. If you just need the number of children, it is cheaper to use
 # compute_max_children than to reify the list of children (only to immediately
 # throw it away).
+supported = {"integer", "boolean", "bytes", "string"}
+
+
 def all_children(ir_type, kwargs):
-    if ir_type == "integer":
-        min_value = kwargs["min_value"]
-        max_value = kwargs["max_value"]
+    if ir_type in supported:
+        for index in range(compute_max_children(ir_type, kwargs)):
+            yield ir_ordering(ir_type, kwargs, index, to="value")
+        return
 
-        if min_value is None and max_value is None:
-            # full 128 bit range.
-            yield from range(-(2**127) + 1, 2**127 - 1)
-
-        elif min_value is not None and max_value is not None:
-            yield from range(min_value, max_value + 1)
-        else:
-            assert (min_value is None) ^ (max_value is None)
-            # hard case: only one bound was specified. Here we probe in 128 bits
-            # around shrink_towards, and discard those above max_value or below
-            # min_value respectively.
-            shrink_towards = kwargs["shrink_towards"]
-            if min_value is None:
-                shrink_towards = min(max_value, shrink_towards)
-                yield from range(shrink_towards - (2**127) + 1, max_value)
-            else:
-                assert max_value is None
-                shrink_towards = max(min_value, shrink_towards)
-                yield from range(min_value, shrink_towards + (2**127) - 1)
-
-    if ir_type == "boolean":
-        p = kwargs["p"]
-        if p <= 2 ** (-64):
-            yield False
-        elif p >= (1 - 2 ** (-64)):
-            yield True
-        else:
-            yield from [False, True]
-    if ir_type == "bytes":
-        for size in range(kwargs["min_size"], kwargs["max_size"] + 1):
-            yield from (int_to_bytes(i, size) for i in range(2 ** (8 * size)))
-    if ir_type == "string":
-        min_size = kwargs["min_size"]
-        max_size = kwargs["max_size"]
-        intervals = kwargs["intervals"]
-
-        # written unidiomatically in order to handle the case of max_size=inf.
-        size = min_size
-        while size <= max_size:
-            for ords in itertools.product(intervals, repeat=size):
-                yield "".join(chr(n) for n in ords)
-            size += 1
     if ir_type == "float":
 
         def floats_between(a, b):
@@ -702,7 +667,7 @@ class DataTree:
         """
         return self.root.is_exhausted
 
-    def generate_novel_prefix(self, random):
+    def generate_novel_prefix(self, random: Random) -> list["IRNode"]:
         """Generate a short random string that (after rewriting) is not
         a prefix of any buffer previously added to the tree.
 
@@ -710,12 +675,15 @@ class DataTree:
         for it to be uniform at random, but previous attempts to do that
         have proven too expensive.
         """
+        from hypothesis.internal.conjecture.data import IRNode
 
         assert not self.is_exhausted
-        novel_prefix = bytearray()
+        novel_prefix = []
 
-        def append_buf(buf):
-            novel_prefix.extend(buf)
+        def append_node(node: IRNode) -> None:
+            if node.ir_type == "float":
+                node.value = int_to_float(node.value)
+            novel_prefix.append(node)
 
         current_node = self.root
         while True:
@@ -726,16 +694,17 @@ class DataTree:
                 if i in current_node.forced:
                     if ir_type == "float":
                         value = int_to_float(value)
-                    (_value, buf) = self._draw(
-                        ir_type, kwargs, forced=value, random=random
+                    append_node(
+                        IRNode(
+                            ir_type=ir_type, value=value, kwargs=kwargs, was_forced=True
+                        )
                     )
-                    append_buf(buf)
                 else:
                     attempts = 0
                     while True:
                         if attempts <= 10:
                             try:
-                                (v, buf) = self._draw(ir_type, kwargs, random=random)
+                                node = self._draw(ir_type, kwargs, random=random)
                             except StopTest:  # pragma: no cover
                                 # it is possible that drawing from a fresh data can
                                 # overrun BUFFER_SIZE, due to eg unlucky rejection sampling
@@ -743,24 +712,24 @@ class DataTree:
                                 attempts += 1
                                 continue
                         else:
-                            (v, buf) = self._draw_from_cache(
+                            node = self._draw_from_cache(
                                 ir_type, kwargs, key=id(current_node), random=random
                             )
 
-                        if v != value:
-                            append_buf(buf)
+                        if node.value != value:
+                            append_node(node)
                             break
                         attempts += 1
                         self._reject_child(
-                            ir_type, kwargs, child=v, key=id(current_node)
+                            ir_type, kwargs, child=node.value, key=id(current_node)
                         )
                     # We've now found a value that is allowed to
                     # vary, so what follows is not fixed.
-                    return bytes(novel_prefix)
+                    return novel_prefix
             else:
                 assert not isinstance(current_node.transition, (Conclusion, Killed))
                 if current_node.transition is None:
-                    return bytes(novel_prefix)
+                    return novel_prefix
                 branch = current_node.transition
                 assert isinstance(branch, Branch)
 
@@ -768,28 +737,28 @@ class DataTree:
                 while True:
                     if attempts <= 10:
                         try:
-                            (v, buf) = self._draw(
+                            node = self._draw(
                                 branch.ir_type, branch.kwargs, random=random
                             )
                         except StopTest:  # pragma: no cover
                             attempts += 1
                             continue
                     else:
-                        (v, buf) = self._draw_from_cache(
+                        node = self._draw_from_cache(
                             branch.ir_type, branch.kwargs, key=id(branch), random=random
                         )
                     try:
-                        child = branch.children[v]
+                        child = branch.children[node.value]
                     except KeyError:
-                        append_buf(buf)
-                        return bytes(novel_prefix)
+                        append_node(node)
+                        return novel_prefix
                     if not child.is_exhausted:
-                        append_buf(buf)
+                        append_node(node)
                         current_node = child
                         break
                     attempts += 1
                     self._reject_child(
-                        branch.ir_type, branch.kwargs, child=v, key=id(branch)
+                        branch.ir_type, branch.kwargs, child=node.value, key=id(branch)
                     )
 
                     # We don't expect this assertion to ever fire, but coverage
@@ -801,19 +770,17 @@ class DataTree:
                         or any(not v.is_exhausted for v in branch.children.values())
                     )
 
-    def rewrite(self, buffer):
+    def rewrite(self, ir_nodes):
         """Use previously seen ConjectureData objects to return a tuple of
         the rewritten buffer and the status we would get from running that
         buffer with the test function. If the status cannot be predicted
         from the existing values it will be None."""
-        buffer = bytes(buffer)
-
-        data = ConjectureData.for_buffer(buffer)
+        data = ConjectureData.for_ir(ir_nodes)
         try:
             self.simulate_test_function(data)
-            return (data.buffer, data.status)
+            return (data.ir_prefix, data.status)
         except PreviouslyUnseenBehaviour:
-            return (buffer, None)
+            return (ir_nodes, None)
 
     def simulate_test_function(self, data):
         """Run a simulated version of the test function recorded by
@@ -864,10 +831,10 @@ class DataTree:
     def new_observer(self):
         return TreeRecordingObserver(self)
 
-    def _draw(self, ir_type, kwargs, *, random, forced=None):
-        from hypothesis.internal.conjecture.data import ir_to_buffer
+    def _draw(self, ir_type, kwargs, *, random) -> "IRNode":
+        from hypothesis.internal.conjecture.data import IRNode, value_from_ir
 
-        (value, buf) = ir_to_buffer(ir_type, kwargs, forced=forced, random=random)
+        value = value_from_ir(ir_type, kwargs, random=random)
         # using floats as keys into branch.children breaks things, because
         # e.g. hash(0.0) == hash(-0.0) would collide as keys when they are
         # in fact distinct child branches.
@@ -878,7 +845,7 @@ class DataTree:
         # buffer), and converting between the two forms as appropriate.
         if ir_type == "float":
             value = float_to_int(value)
-        return (value, buf)
+        return IRNode(ir_type=ir_type, value=value, kwargs=kwargs, was_forced=False)
 
     def _get_children_cache(self, ir_type, kwargs, *, key):
         # cache the state of the children generator per node/branch (passed as
@@ -898,7 +865,9 @@ class DataTree:
 
         return self._children_cache[key]
 
-    def _draw_from_cache(self, ir_type, kwargs, *, key, random):
+    def _draw_from_cache(self, ir_type, kwargs, *, key, random) -> "IRNode":
+        from hypothesis.internal.conjecture.data import IRNode
+
         (generator, children, rejected) = self._get_children_cache(
             ir_type, kwargs, key=key
         )
@@ -918,11 +887,8 @@ class DataTree:
                 if len(children) >= 100:
                     break
 
-        forced = random.choice(children)
-        if ir_type == "float":
-            forced = int_to_float(forced)
-        (value, buf) = self._draw(ir_type, kwargs, forced=forced, random=random)
-        return (value, buf)
+        value = random.choice(children)
+        return IRNode(ir_type=ir_type, value=value, kwargs=kwargs, was_forced=True)
 
     def _reject_child(self, ir_type, kwargs, *, child, key):
         (_generator, children, rejected) = self._get_children_cache(
