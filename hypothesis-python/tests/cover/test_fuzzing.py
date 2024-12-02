@@ -393,6 +393,10 @@ def test_replaying_buffer_is_deterministic(buffer, draws):
         ),
     ],
 )
+# TODO (most of) this test passes even if we disable copy_nodes. We have to disable
+# all of copy_nodes, delete_nodes, and repeat_nodes to get everything to fail here.
+# I'm not sure why copy or delete would find these test cases by chance - something
+# weird might be going on here.
 def test_can_copy_sequences_of_nodes(strat1, strat2, start, eq):
     s1 = st.composite(lambda draw: [draw(s) for s in strat1])
     s2 = st.composite(lambda draw: [draw(s) for s in strat2])

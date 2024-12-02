@@ -11,6 +11,7 @@
 import abc
 import inspect
 import math
+import os
 import random
 import time
 from collections.abc import Mapping
@@ -19,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from random import Random
 from types import SimpleNamespace
-from typing import Any, Callable, TypedDict
+from typing import Any, Callable, Optional, TypedDict
 
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
@@ -518,9 +519,11 @@ def _get_draws_from_cache(buffer: bytes) -> list["Draw"] | None:
             return None
 
 
-def mutation(*, p: float, repeatable: bool = False) -> Callable:
+def mutation(
+    *, p: float, repeatable: bool = False, id: Optional[str] = None
+) -> Callable:
     def accept(f):
-        f._hypothesis_mutation = SimpleNamespace(p=p, repeatable=repeatable)
+        f._hypothesis_mutation = SimpleNamespace(p=p, repeatable=repeatable, id=id)
         return f
 
     return accept
@@ -649,7 +652,7 @@ class NodeMutator(Mutator):
             i for i, draw in enumerate(self.draws) if draw.forced is None
         ]
 
-    @mutation(p=0.2)
+    @mutation(p=0.2, id="nodes.copy_nodes")
     def copy_nodes(self, budget: int) -> int | object:
         assert budget >= 1
         if len(self.draws) <= 1:
@@ -738,7 +741,7 @@ class NodeMutator(Mutator):
         # we changed `size` nodes, which is therefore our cost.
         return size
 
-    @mutation(p=0.2, repeatable=True)
+    @mutation(p=0.2, repeatable=True, id="nodes.repeat_nodes")
     def repeat_nodes(self, budget: int, count: int) -> int | object:
         # look for a sequence of nodes and then insert `count` copies of it after
         if len(self.draws) <= 1:
@@ -776,7 +779,7 @@ class NodeMutator(Mutator):
         self._update_malleable_indices()
         return size * count
 
-    @mutation(p=1, repeatable=True)
+    @mutation(p=1, repeatable=True, id="nodes.mutate_node")
     def mutate_node(self, budget: int, count: int) -> int | object:
         assert budget >= 1
         if not self.malleable_indices:
@@ -889,7 +892,7 @@ class NodeMutator(Mutator):
                 j for j in range(i, end) if self.draws[j].forced is None
             )
 
-    @mutation(p=0.05)
+    @mutation(p=0.05, id="nodes.delete_nodes")
     def delete_nodes(self, budget: int) -> int | object:
         assert budget >= 1
         # dont delete if there's only a single node, because there's no point
@@ -1111,6 +1114,11 @@ for MutatorClass in [NodeMutator, CollectionMutator]:
         if not hasattr(method, "_hypothesis_mutation"):
             continue
         data = method._hypothesis_mutation
+        # bash doesn't allow dots in the `export` command, use underscores instead
+        if data.id is not None and os.environ.get(
+            f"HYPOTHESIS_FUZZING_DISABLE_MUTATION_{data.id.replace('.', '_')}"
+        ):
+            continue
         MutatorClass.mutations.append(
             Mutation(func=method, p=data.p, repeatable=data.repeatable)
         )
