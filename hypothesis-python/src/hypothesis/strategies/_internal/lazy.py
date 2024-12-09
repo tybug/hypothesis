@@ -166,6 +166,9 @@ class LazyStrategy(SearchStrategy):
     def do_draw(self, data):
         return data.draw(self.wrapped_strategy)
 
+    def invert(self, value):
+        return self.wrapped_strategy.invert(value)
+
     @property
     def label(self):
         return self.wrapped_strategy.label

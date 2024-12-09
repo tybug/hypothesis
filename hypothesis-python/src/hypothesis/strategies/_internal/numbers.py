@@ -104,6 +104,16 @@ class IntegersStrategy(SearchStrategy):
             return self
         return super().filter(pred)
 
+    def invert(self, value):
+        from hypothesis.internal.conjecture.data import IRNode
+
+        assert isinstance(value, int)
+        if self.start is not None:
+            assert self.start <= value
+        if self.end is not None:
+            assert value <= self.end
+        return [IRNode(ir_type="integer", value=value, kwargs={}, was_forced=False)]
+
 
 @cacheable
 @defines_strategy(force_reusable_values=True)

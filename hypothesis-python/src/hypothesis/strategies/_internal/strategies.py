@@ -465,6 +465,13 @@ class SearchStrategy(Generic[Ex]):
     def do_draw(self, data: ConjectureData) -> Ex:
         raise NotImplementedError(f"{type(self).__name__}.do_draw")
 
+    def invert(self, value):
+        """
+        Provide the TCS nodes which would generate the passed value. raise an error
+        if the value cannot be generated.
+        """
+        raise NotImplementedError
+
     def __init__(self):
         pass
 

@@ -425,6 +425,17 @@ def is_invalid_test(test, original_sig, given_arguments, given_kwargs):
         )
 
 
+class TCSDataObject:
+    def __init__(self, data: ConjectureData, values):
+        self.cd = data
+        self.values = values
+
+    def draw(self, strategy: SearchStrategy[Ex], label: Any = None) -> Ex:
+        nodes = strategy.invert(self.values.pop(0))
+        self.cd.ir_prefix += nodes
+        return self.cd.draw(strategy)
+
+
 def execute_explicit_examples(state, wrapped_test, arguments, kwargs, original_sig):
     assert isinstance(state, StateForActualGivenExecution)
     posargs = [
@@ -475,7 +486,16 @@ def execute_explicit_examples(state, wrapped_test, arguments, kwargs, original_s
 
         with local_settings(state.settings):
             fragments_reported = []
-            empty_data = ConjectureData.for_buffer(b"")
+            empty_data = ConjectureData(
+                ir_tree_prefix=[],
+                max_length_ir=BUFFER_SIZE,
+                max_length=BUFFER_SIZE,
+                prefix=b"",
+                random=None,
+            )
+            example_kwargs["data"] = TCSDataObject(
+                empty_data, values=example_kwargs["data"]
+            )
             try:
                 execute_example = partial(
                     state.execute_once,
