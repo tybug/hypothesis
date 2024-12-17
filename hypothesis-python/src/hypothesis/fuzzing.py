@@ -9,11 +9,13 @@
 # obtain one at https://mozilla.org/MPL/2.0/.
 
 import abc
+import base64
 import inspect
 import math
 import os
 import random
 import time
+from collections import defaultdict
 from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -64,6 +66,9 @@ data_to_draws_unsaved: Mapping[bytes, list["Draw"]] = LRUCache(
 # stores bounds for interesting / actual corpus data. unbounded
 data_to_draws: dict[bytes, list["Draw"]] = {}
 
+collect_diagnostic = False
+child_to_parents = defaultdict(list)
+
 
 class Statistics(TypedDict):
     per_item_stats: list[Any]
@@ -100,6 +105,10 @@ def _geometric(*, min, average, max, random):
     # _calculate_p_continue, which folds the prob density of > max_size into
     # max_size itself. I think avoiding this is better for fuzzing.
     return min + math.floor(x)
+
+
+def encode_buffer(buffer):
+    return base64.b64encode(buffer).decode("ascii")
 
 
 def random_float_between(min_value, max_value, smallest_nonzero_magnitude, *, random):
@@ -1238,7 +1247,10 @@ def custom_mutator(data: bytes, *, random: Random, blackbox: bool) -> bytes:
     if track_per_item_stats:
         stats["after"] = [_make_serializable(draw.value) for draw in mutated_draws]
         statistics["per_item_stats"].append(stats)
-    # print("HYPOTHESIS MUTATED TO", serialized_ir)
+
+    if collect_diagnostic:
+        child_to_parents[encode_buffer(data)].append(encode_buffer(serialized_ir))
+
     assert len(serialized_ir) <= MAX_SERIALIZED_SIZE
     return serialized_ir
 
