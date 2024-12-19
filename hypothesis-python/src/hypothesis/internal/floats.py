@@ -180,6 +180,7 @@ def sign_aware_lte(x: float, y: float) -> bool:
         return x <= y
 
 
+MAX_PRECISE_INTEGER = 2**53
 SMALLEST_SUBNORMAL = next_up(0.0)
 SIGNALING_NAN = int_to_float(0x7FF8_0000_0000_0001)  # nonzero mantissa
 assert math.isnan(SIGNALING_NAN)

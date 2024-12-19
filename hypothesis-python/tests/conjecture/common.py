@@ -103,11 +103,10 @@ def fresh_data(*, random=None, observer=None) -> ConjectureData:
         # drawing this from the current build context is almost *too* magical. But
         # the alternative is an extra @given(st.randoms()) everywhere we use
         # fresh_data, so eh.
-        random = context.data.draw(st.randoms())
+        random = context.data.draw(st.randoms(use_true_random=True))
 
     return ConjectureData(
         BUFFER_SIZE,
-        prefix=b"",
         random=random,
         observer=observer,
     )

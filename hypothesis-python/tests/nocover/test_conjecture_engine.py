@@ -9,13 +9,13 @@
 # obtain one at https://mozilla.org/MPL/2.0/.
 
 from hypothesis import given, settings, strategies as st
-from hypothesis.database import InMemoryExampleDatabase
+from hypothesis.database import InMemoryExampleDatabase, ir_from_bytes
 from hypothesis.internal.conjecture.data import ConjectureData
 from hypothesis.internal.conjecture.engine import ConjectureRunner
 from hypothesis.internal.conjecture.shrinker import Shrinker, node_program
 
 from tests.common.utils import counts_calls, non_covering_examples
-from tests.conjecture.common import ir, run_to_nodes, shrinking_from
+from tests.conjecture.common import run_to_nodes, shrinking_from
 
 
 def test_lot_of_dead_nodes():
@@ -39,7 +39,7 @@ def test_saves_data_while_shrinking(monkeypatch):
     monkeypatch.setattr(
         ConjectureRunner,
         "generate_new_examples",
-        lambda runner: runner.cached_test_function_ir(ir(bytes([255]) * 10)),
+        lambda runner: runner.cached_test_function_ir([bytes([255] * 10)]),
     )
 
     def f(data):
@@ -53,7 +53,8 @@ def test_saves_data_while_shrinking(monkeypatch):
     runner.run()
     assert runner.interesting_examples
     assert len(seen) == n
-    in_db = non_covering_examples(db)
+    # [0] to get the first ir choice of draw_bytes
+    in_db = {ir_from_bytes(b)[0] for b in non_covering_examples(db)}
     assert in_db.issubset(seen)
     assert in_db == seen
 
@@ -65,7 +66,7 @@ def test_can_discard(monkeypatch):
         ConjectureRunner,
         "generate_new_examples",
         lambda runner: runner.cached_test_function_ir(
-            ir(*[bytes(v) for i in range(n) for v in [i, i]])
+            tuple(bytes(v) for i in range(n) for v in [i, i])
         ),
     )
 
@@ -86,10 +87,10 @@ def test_cached_with_masked_byte_agrees_with_results(a, b):
 
     runner = ConjectureRunner(f)
 
-    cached_a = runner.cached_test_function_ir(ir(a))
-    cached_b = runner.cached_test_function_ir(ir(b))
+    cached_a = runner.cached_test_function_ir((a,))
+    cached_b = runner.cached_test_function_ir((b,))
 
-    data_b = ConjectureData.for_ir_tree(ir(b), observer=runner.tree.new_observer())
+    data_b = ConjectureData.for_ir((b,), observer=runner.tree.new_observer())
     runner.test_function(data_b)
 
     # If the cache found an old result, then it should match the real result.
@@ -98,9 +99,9 @@ def test_cached_with_masked_byte_agrees_with_results(a, b):
 
 
 def test_node_programs_fail_efficiently(monkeypatch):
-    # Create 256 byte-sized blocks. None of the blocks can be deleted, and
+    # Create 256 byte-sized nodes. None of the nodes can be deleted, and
     # every deletion attempt produces a different buffer.
-    @shrinking_from(sum((ir(i) for i in range(256)), start=()))
+    @shrinking_from(range(256))
     def shrinker(data: ConjectureData):
         values = set()
         for _ in range(256):
@@ -117,7 +118,7 @@ def test_node_programs_fail_efficiently(monkeypatch):
 
     assert shrinker.shrinks == 0
     assert 250 <= shrinker.calls <= 260
-    # The block program should have been run roughly 255 times, with a little
+    # The node program should have been run roughly 255 times, with a little
     # bit of wiggle room for implementation details.
     #   - Too many calls mean that failing steps are doing too much work.
     #   - Too few calls mean that this test is probably miscounting and buggy.

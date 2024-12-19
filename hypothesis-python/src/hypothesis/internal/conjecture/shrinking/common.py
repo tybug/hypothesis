@@ -26,12 +26,12 @@ class Shrinker:
         name=None,
         **kwargs,
     ):
-        self.setup(**kwargs)
         self.current = self.make_immutable(initial)
         self.initial = self.current
         self.full = full
         self.changes = 0
         self.name = name
+        self.setup(**kwargs)
 
         self.__predicate = predicate
         self.__seen = set()
@@ -59,21 +59,11 @@ class Shrinker:
     def delegate(self, other_class, convert_to, convert_from, **kwargs):
         """Delegates shrinking to another shrinker class, by converting the
         current value to and from it with provided functions."""
-        self.call_shrinker(
-            other_class,
+        other_class.shrink(
             convert_to(self.current),
             lambda v: self.consider(convert_from(v)),
             **kwargs,
         )
-
-    def call_shrinker(self, other_class, initial, predicate, **kwargs):
-        """Calls another shrinker class, passing through the relevant context
-        variables.
-
-        Note we explicitly do not pass through full.
-        """
-
-        return other_class.shrink(initial, predicate, **kwargs)
 
     def debug(self, *args: object) -> None:
         if self.debugging_enabled:

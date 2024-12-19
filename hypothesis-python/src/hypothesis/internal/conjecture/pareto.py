@@ -45,10 +45,10 @@ def dominance(left, right):
     more structured or failing tests it can be useful to track, and future work
     will depend on it more."""
 
-    if left.buffer == right.buffer:
+    if left.ir_nodes == right.ir_nodes:
         return DominanceRelation.EQUAL
 
-    if sort_key(right.buffer) < sort_key(left.buffer):
+    if sort_key(right.ir_nodes) < sort_key(left.ir_nodes):
         result = dominance(left=right, right=left)
         if result == DominanceRelation.LEFT_DOMINATES:
             return DominanceRelation.RIGHT_DOMINATES
@@ -60,7 +60,7 @@ def dominance(left, right):
             return result
 
     # Either left is better or there is no dominance relationship.
-    assert sort_key(left.buffer) < sort_key(right.buffer)
+    assert sort_key(left.ir_nodes) < sort_key(right.ir_nodes)
 
     # The right is more interesting
     if left.status < right.status:
@@ -126,7 +126,7 @@ class ParetoFront:
         self.__random = random
         self.__eviction_listeners = []
 
-        self.front = SortedList(key=lambda d: sort_key(d.buffer))
+        self.front = SortedList(key=lambda d: sort_key(d.ir_nodes))
         self.__pending = None
 
     def add(self, data):
@@ -298,7 +298,7 @@ class ParetoOptimiser:
             assert self.front
             i = min(i, len(self.front) - 1)
             target = self.front[i]
-            if target.buffer in seen:
+            if target.ir_nodes in seen:
                 i -= 1
                 continue
             assert target is not prev
@@ -326,7 +326,7 @@ class ParetoOptimiser:
                 return False
 
             shrunk = self.__engine.shrink(target, allow_transition=allow_transition)
-            seen.add(shrunk.buffer)
+            seen.add(shrunk.ir_nodes)
 
             # Note that the front may have changed shape arbitrarily when
             # we ran the shrinker. If it didn't change shape then this is
