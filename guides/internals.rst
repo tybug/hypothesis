@@ -163,8 +163,8 @@ example:
         i = 0
         while i < len(self.intervals):
             u, v = self.intervals[i]
-            if not self.incorporate_new_buffer(
-                self.shrink_target.buffer[:u] + self.shrink_target.buffer[v:]
+            if not self.consider_new_choices(
+                self.shrink_target.choices[:u] + self.shrink_target.choices[v:]
             ):
                 i += 1
 
@@ -174,13 +174,13 @@ The more natural way to write this in Python would be:
 .. code-block:: python
 
         for u, v in self.intervals:
-            self.incorporate_new_buffer(
-                self.shrink_target.buffer[:u] + self.shrink_target.buffer[v:]
+            self.consider_new_choices(
+                self.shrink_target.choices[:u] + self.shrink_target.choices[v:]
             )
 
 This is not equivalent in this case, and would exhibit the wrong behaviour.
 
-Every time ``incorporate_new_buffer`` succeeds, it changes the shape of the
+Every time ``consider_new_choices`` succeeds, it changes the shape of the
 current shrink target. This consequently changes the shape of intervals, both
 its particular values and its current length - on each loop iteration the loop
 might stop either because ``i`` increases or because ``len(self.intervals)``

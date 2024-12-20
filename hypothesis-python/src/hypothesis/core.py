@@ -50,6 +50,7 @@ from hypothesis._settings import (
     settings as Settings,
 )
 from hypothesis.control import BuildContext
+from hypothesis.database import ir_to_bytes
 from hypothesis.errors import (
     BackendCannotProceed,
     DeadlineExceeded,
@@ -479,7 +480,7 @@ def execute_explicit_examples(state, wrapped_test, arguments, kwargs, original_s
 
         with local_settings(state.settings):
             fragments_reported = []
-            empty_data = ConjectureData.for_buffer(b"")
+            empty_data = ConjectureData.for_ir([])
             try:
                 execute_example = partial(
                     state.execute_once,
@@ -1226,7 +1227,7 @@ class StateForActualGivenExecution:
         if runner.interesting_examples:
             self.falsifying_examples = sorted(
                 runner.interesting_examples.values(),
-                key=lambda d: sort_key(d.buffer),
+                key=lambda d: sort_key(d.ir_nodes),
                 reverse=True,
             )
         else:
@@ -1296,9 +1297,7 @@ class StateForActualGivenExecution:
             info = falsifying_example.extra_information
             fragments = []
 
-            ran_example = runner.new_conjecture_data_for_buffer(
-                falsifying_example.buffer
-            )
+            ran_example = runner.new_conjecture_data_ir(falsifying_example.choices)
             ran_example.slice_comments = falsifying_example.slice_comments
             tb = None
             origin = None
@@ -1382,7 +1381,7 @@ class StateForActualGivenExecution:
                     fragments.append(
                         "\nYou can reproduce this example by temporarily adding "
                         "@reproduce_failure(%r, %r) as a decorator on your test case"
-                        % (__version__, encode_failure(falsifying_example.buffer))
+                        % (__version__, encode_failure(falsifying_example.choices))
                     )
                 # Mostly useful for ``find`` and ensuring that objects that
                 # hold on to a reference to ``data`` know that it's now been
@@ -1685,7 +1684,7 @@ def given(
                     )
                 try:
                     state.execute_once(
-                        ConjectureData.for_buffer(decode_failure(failure)),
+                        ConjectureData.for_ir(decode_failure(failure)),
                         print_example=True,
                         is_final=True,
                     )
@@ -1835,15 +1834,14 @@ def given(
                 except (StopTest, UnsatisfiedAssumption):
                     return None
                 except BaseException:
-                    buffer = bytes(data.buffer)
                     known = minimal_failures.get(data.interesting_origin)
                     if settings.database is not None and (
-                        known is None or sort_key(buffer) <= sort_key(known)
+                        known is None or sort_key(data.choices) <= sort_key(known)
                     ):
-                        settings.database.save(database_key, buffer)
-                        minimal_failures[data.interesting_origin] = buffer
+                        settings.database.save(database_key, ir_to_bytes(data.choices))
+                        minimal_failures[data.interesting_origin] = data.choices
                     raise
-                return bytes(data.buffer)
+                return data.choices
 
             fuzz_one_input.__doc__ = HypothesisHandle.fuzz_one_input.__doc__
             return fuzz_one_input

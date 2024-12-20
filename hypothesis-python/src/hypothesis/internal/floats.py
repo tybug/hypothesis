@@ -13,6 +13,8 @@ import struct
 from sys import float_info
 from typing import TYPE_CHECKING, Callable, Literal, Optional, SupportsFloat, Union
 
+from hypothesis.internal.conjecture.junkdrawer import clamp
+
 if TYPE_CHECKING:
     from typing import TypeAlias
 else:
@@ -136,38 +138,39 @@ width_smallest_normals: dict[int, float] = {
 }
 assert width_smallest_normals[64] == float_info.min
 
+mantissa_mask = (1 << 52) - 1
+
 
 def make_float_clamper(
-    min_float: float = 0.0,
-    max_float: float = math.inf,
-    *,
-    allow_zero: bool = False,  # Allows +0.0 (even if minfloat > 0)
+    min_value: float,
+    max_value: float,
+    smallest_nonzero_magnitude: float,
+    allow_nan: bool,
 ) -> Optional[Callable[[float], float]]:
     """
     Return a function that clamps positive floats into the given bounds.
-
-    Returns None when no values are allowed (min > max and zero is not allowed).
     """
-    if max_float < min_float:
-        if allow_zero:
-            min_float = max_float = 0.0
-        else:
-            return None
+    assert sign_aware_lte(min_value, max_value)
+    range_size = min(max_value - min_value, float_info.max)
+    if math.isinf(range_size):
+        range_size = float_info.max
 
-    range_size = min(max_float - min_float, float_info.max)
-    mantissa_mask = (1 << 52) - 1
+    def permitted(f: float) -> bool:
+        if math.isnan(f):
+            return allow_nan
+        if 0 < abs(f) < smallest_nonzero_magnitude:
+            return False
+        return sign_aware_lte(min_value, f) and sign_aware_lte(f, max_value)
 
-    def float_clamper(float_val: float) -> float:
-        if min_float <= float_val <= max_float:
-            return float_val
-        if float_val == 0.0 and allow_zero:
-            return float_val
+    def float_clamper(f: float) -> float:
+        if permitted(f):
+            return f
         # Outside bounds; pick a new value, sampled from the allowed range,
         # using the mantissa bits.
-        mant = float_to_int(float_val) & mantissa_mask
-        float_val = min_float + range_size * (mant / mantissa_mask)
+        mant = float_to_int(abs(f)) & mantissa_mask
+        f = min_value + range_size * (mant / mantissa_mask)
         # Re-enforce the bounds (just in case of floating point arithmetic error)
-        return max(min_float, min(max_float, float_val))
+        return clamp(min_value, f, max_value)
 
     return float_clamper
 
@@ -180,6 +183,7 @@ def sign_aware_lte(x: float, y: float) -> bool:
         return x <= y
 
 
+MAX_PRECISE_INTEGER = 2**53
 SMALLEST_SUBNORMAL = next_up(0.0)
 SIGNALING_NAN = int_to_float(0x7FF8_0000_0000_0001)  # nonzero mantissa
 assert math.isnan(SIGNALING_NAN)

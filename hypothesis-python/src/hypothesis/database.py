@@ -24,14 +24,14 @@ from os import getenv
 from pathlib import Path, PurePath
 from queue import Queue
 from threading import Thread
-from typing import Optional
+from typing import Optional, Union
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from zipfile import BadZipFile, ZipFile
 
 from hypothesis.configuration import storage_directory
 from hypothesis.errors import HypothesisException, HypothesisWarning
-from hypothesis.internal.conjecture.data import IRType
+from hypothesis.internal.conjecture.data import IRNode, IRType
 from hypothesis.utils.conventions import not_set
 
 __all__ = [
@@ -723,7 +723,7 @@ class BackgroundWriteDatabase(ExampleDatabase):
         self._queue.put(("move", (src, dest, value)))
 
 
-def ir_to_bytes(ir: Iterable[IRType], /) -> bytes:
+def ir_to_bytes(ir: Union[Iterable[IRType], Iterable[IRNode]], /) -> bytes:
     """Serialize a list of IR elements to a bytestring.  Inverts ir_from_bytes."""
     # We use a custom serialization format for this, which might seem crazy - but our
     # data is a flat sequence of elements, and standard tools like protobuf or msgpack
@@ -733,6 +733,8 @@ def ir_to_bytes(ir: Iterable[IRType], /) -> bytes:
     # then the payload bytes.  For booleans, the payload is inlined into the metadata.
     parts = []
     for elem in ir:
+        if isinstance(elem, IRNode):
+            elem = elem.value
         if isinstance(elem, bool):
             # `000_0000v` - tag zero, low bit payload.
             parts.append(b"\1" if elem else b"\0")
@@ -748,7 +750,7 @@ def ir_to_bytes(ir: Iterable[IRType], /) -> bytes:
         elif isinstance(elem, bytes):
             tag = 3 << 5
         else:
-            assert isinstance(elem, str)
+            assert isinstance(elem, str), elem
             tag = 4 << 5
             elem = elem.encode(errors="surrogatepass")
 
@@ -763,8 +765,8 @@ def ir_to_bytes(ir: Iterable[IRType], /) -> bytes:
     return b"".join(parts)
 
 
-def ir_from_bytes(buffer: bytes, /) -> list[IRType]:
-    """Deserialize a bytestring to a list of IR elements. Inverts ir_to_bytes."""
+def ir_from_bytes(buffer: bytes, /) -> tuple[IRType, ...]:
+    """Deserialize a bytestring to a tuple of IR elements. Inverts ir_to_bytes."""
     # See above for an explanation of the format.
     parts: list[IRType] = []
     idx = 0
@@ -792,4 +794,4 @@ def ir_from_bytes(buffer: bytes, /) -> list[IRType]:
         else:
             assert tag == 4
             parts.append(chunk.decode(errors="surrogatepass"))
-    return parts
+    return tuple(parts)

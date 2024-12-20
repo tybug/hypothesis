@@ -8,7 +8,6 @@
 # v. 2.0. If a copy of the MPL was not distributed with this file, You can
 # obtain one at https://mozilla.org/MPL/2.0/.
 
-import itertools
 import math
 from typing import Optional, Union
 
@@ -21,7 +20,6 @@ from hypothesis.errors import (
     StopTest,
 )
 from hypothesis.internal import floats as flt
-from hypothesis.internal.compat import int_to_bytes
 from hypothesis.internal.conjecture.data import (
     BooleanKWargs,
     BytesKWargs,
@@ -34,6 +32,7 @@ from hypothesis.internal.conjecture.data import (
     IRTypeName,
     Status,
     StringKWargs,
+    choice_from_index,
 )
 from hypothesis.internal.escalation import InterestingOrigin
 from hypothesis.internal.floats import (
@@ -258,85 +257,11 @@ def compute_max_children(ir_type, kwargs):
 # reasons. If you just need the number of children, it is cheaper to use
 # compute_max_children than to reify the list of children (only to immediately
 # throw it away).
+
+
 def all_children(ir_type, kwargs):
-    if ir_type == "integer":
-        min_value = kwargs["min_value"]
-        max_value = kwargs["max_value"]
-
-        if min_value is None and max_value is None:
-            # full 128 bit range.
-            yield from range(-(2**127) + 1, 2**127 - 1)
-
-        elif min_value is not None and max_value is not None:
-            yield from range(min_value, max_value + 1)
-        else:
-            assert (min_value is None) ^ (max_value is None)
-            # hard case: only one bound was specified. Here we probe in 128 bits
-            # around shrink_towards, and discard those above max_value or below
-            # min_value respectively.
-            shrink_towards = kwargs["shrink_towards"]
-            if min_value is None:
-                shrink_towards = min(max_value, shrink_towards)
-                yield from range(shrink_towards - (2**127) + 1, max_value)
-            else:
-                assert max_value is None
-                shrink_towards = max(min_value, shrink_towards)
-                yield from range(min_value, shrink_towards + (2**127) - 1)
-
-    if ir_type == "boolean":
-        p = kwargs["p"]
-        if p <= 2 ** (-64):
-            yield False
-        elif p >= (1 - 2 ** (-64)):
-            yield True
-        else:
-            yield from [False, True]
-    if ir_type == "bytes":
-        for size in range(kwargs["min_size"], kwargs["max_size"] + 1):
-            yield from (int_to_bytes(i, size) for i in range(2 ** (8 * size)))
-    if ir_type == "string":
-        min_size = kwargs["min_size"]
-        max_size = kwargs["max_size"]
-        intervals = kwargs["intervals"]
-
-        # written unidiomatically in order to handle the case of max_size=inf.
-        size = min_size
-        while size <= max_size:
-            for ords in itertools.product(intervals, repeat=size):
-                yield "".join(chr(n) for n in ords)
-            size += 1
-    if ir_type == "float":
-
-        def floats_between(a, b):
-            for n in range(float_to_int(a), float_to_int(b) + 1):
-                yield int_to_float(n)
-
-        min_value = kwargs["min_value"]
-        max_value = kwargs["max_value"]
-        smallest_nonzero_magnitude = kwargs["smallest_nonzero_magnitude"]
-
-        # handle zeroes separately so smallest_nonzero_magnitude can think of
-        # itself as a complete interval (instead of a hole at ±0).
-        if sign_aware_lte(min_value, -0.0) and sign_aware_lte(-0.0, max_value):
-            yield -0.0
-        if sign_aware_lte(min_value, 0.0) and sign_aware_lte(0.0, max_value):
-            yield 0.0
-
-        if flt.is_negative(min_value):
-            if flt.is_negative(max_value):
-                # case: both negative.
-                max_point = min(max_value, -smallest_nonzero_magnitude)
-                # float_to_int increases as negative magnitude increases, so
-                # invert order.
-                yield from floats_between(max_point, min_value)
-            else:
-                # case: straddles midpoint (which is between -0.0 and 0.0).
-                yield from floats_between(-smallest_nonzero_magnitude, min_value)
-                yield from floats_between(smallest_nonzero_magnitude, max_value)
-        else:
-            # case: both positive.
-            min_point = max(min_value, smallest_nonzero_magnitude)
-            yield from floats_between(min_point, max_value)
+    for index in range(compute_max_children(ir_type, kwargs)):
+        yield choice_from_index(index, ir_type, kwargs)
 
 
 @attr.s(slots=True)
@@ -710,15 +635,13 @@ class DataTree:
         for it to be uniform at random, but previous attempts to do that
         have proven too expensive.
         """
-        from hypothesis.internal.conjecture.data import IRNode
-
         assert not self.is_exhausted
-        novel_prefix = []
+        prefix = []
 
-        def append_node(node):
-            if node.ir_type == "float":
-                node.value = int_to_float(node.value)
-            novel_prefix.append(node)
+        def append_choice(ir_type, choice):
+            if ir_type == "float":
+                choice = int_to_float(choice)
+            prefix.append(choice)
 
         current_node = self.root
         while True:
@@ -727,17 +650,13 @@ class DataTree:
                 zip(current_node.ir_types, current_node.kwargs, current_node.values)
             ):
                 if i in current_node.forced:
-                    append_node(
-                        IRNode(
-                            ir_type=ir_type, value=value, kwargs=kwargs, was_forced=True
-                        )
-                    )
+                    append_choice(ir_type, value)
                 else:
                     attempts = 0
                     while True:
                         if attempts <= 10:
                             try:
-                                node = self._draw(ir_type, kwargs, random=random)
+                                node_value = self._draw(ir_type, kwargs, random=random)
                             except StopTest:  # pragma: no cover
                                 # it is possible that drawing from a fresh data can
                                 # overrun BUFFER_SIZE, due to eg unlucky rejection sampling
@@ -745,24 +664,24 @@ class DataTree:
                                 attempts += 1
                                 continue
                         else:
-                            node = self._draw_from_cache(
+                            node_value = self._draw_from_cache(
                                 ir_type, kwargs, key=id(current_node), random=random
                             )
 
-                        if node.value != value:
-                            append_node(node)
+                        if node_value != value:
+                            append_choice(ir_type, node_value)
                             break
                         attempts += 1
                         self._reject_child(
-                            ir_type, kwargs, child=node.value, key=id(current_node)
+                            ir_type, kwargs, child=node_value, key=id(current_node)
                         )
                     # We've now found a value that is allowed to
                     # vary, so what follows is not fixed.
-                    return tuple(novel_prefix)
+                    return tuple(prefix)
             else:
                 assert not isinstance(current_node.transition, (Conclusion, Killed))
                 if current_node.transition is None:
-                    return tuple(novel_prefix)
+                    return tuple(prefix)
                 branch = current_node.transition
                 assert isinstance(branch, Branch)
 
@@ -770,28 +689,28 @@ class DataTree:
                 while True:
                     if attempts <= 10:
                         try:
-                            node = self._draw(
+                            node_value = self._draw(
                                 branch.ir_type, branch.kwargs, random=random
                             )
                         except StopTest:  # pragma: no cover
                             attempts += 1
                             continue
                     else:
-                        node = self._draw_from_cache(
+                        node_value = self._draw_from_cache(
                             branch.ir_type, branch.kwargs, key=id(branch), random=random
                         )
                     try:
-                        child = branch.children[node.value]
+                        child = branch.children[node_value]
                     except KeyError:
-                        append_node(node)
-                        return tuple(novel_prefix)
+                        append_choice(branch.ir_type, node_value)
+                        return tuple(prefix)
                     if not child.is_exhausted:
-                        append_node(node)
+                        append_choice(branch.ir_type, node_value)
                         current_node = child
                         break
                     attempts += 1
                     self._reject_child(
-                        branch.ir_type, branch.kwargs, child=node.value, key=id(branch)
+                        branch.ir_type, branch.kwargs, child=node_value, key=id(branch)
                     )
 
                     # We don't expect this assertion to ever fire, but coverage
@@ -803,17 +722,17 @@ class DataTree:
                         or any(not v.is_exhausted for v in branch.children.values())
                     )
 
-    def rewrite(self, nodes):
+    def rewrite(self, choices):
         """Use previously seen ConjectureData objects to return a tuple of
         the rewritten choice sequence and the status we would get from running
         that with the test function. If the status cannot be predicted
         from the existing values it will be None."""
-        data = ConjectureData.for_ir_tree(nodes)
+        data = ConjectureData.for_ir(choices)
         try:
             self.simulate_test_function(data)
-            return (data.ir_nodes, data.status)
+            return (data.choices, data.status)
         except PreviouslyUnseenBehaviour:
-            return (nodes, None)
+            return (choices, None)
 
     def simulate_test_function(self, data):
         """Run a simulated version of the test function recorded by
@@ -865,9 +784,9 @@ class DataTree:
         return TreeRecordingObserver(self)
 
     def _draw(self, ir_type, kwargs, *, random):
-        from hypothesis.internal.conjecture.data import IRNode, ir_to_buffer
+        from hypothesis.internal.conjecture.data import value_from_ir
 
-        (value, buf) = ir_to_buffer(ir_type, kwargs, random=random)
+        value = value_from_ir(ir_type, kwargs, random=random)
         # using floats as keys into branch.children breaks things, because
         # e.g. hash(0.0) == hash(-0.0) would collide as keys when they are
         # in fact distinct child branches.
@@ -878,7 +797,7 @@ class DataTree:
         # buffer), and converting between the two forms as appropriate.
         if ir_type == "float":
             value = float_to_int(value)
-        return IRNode(ir_type=ir_type, value=value, kwargs=kwargs, was_forced=False)
+        return value
 
     def _get_children_cache(self, ir_type, kwargs, *, key):
         # cache the state of the children generator per node/branch (passed as
@@ -899,8 +818,6 @@ class DataTree:
         return self._children_cache[key]
 
     def _draw_from_cache(self, ir_type, kwargs, *, key, random):
-        from hypothesis.internal.conjecture.data import IRNode
-
         (generator, children, rejected) = self._get_children_cache(
             ir_type, kwargs, key=key
         )
@@ -920,8 +837,7 @@ class DataTree:
                 if len(children) >= 100:
                     break
 
-        value = random.choice(children)
-        return IRNode(ir_type=ir_type, value=value, kwargs=kwargs, was_forced=True)
+        return random.choice(children)
 
     def _reject_child(self, ir_type, kwargs, *, child, key):
         (_generator, children, rejected) = self._get_children_cache(

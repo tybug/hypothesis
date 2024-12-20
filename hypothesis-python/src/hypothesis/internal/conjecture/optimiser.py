@@ -17,10 +17,10 @@ from hypothesis.internal.conjecture.data import (
     Status,
     _Overrun,
     bits_to_bytes,
-    ir_size_nodes,
+    ir_size,
     ir_value_permitted,
 )
-from hypothesis.internal.conjecture.engine import BUFFER_SIZE_IR, ConjectureRunner
+from hypothesis.internal.conjecture.engine import BUFFER_SIZE, ConjectureRunner
 from hypothesis.internal.conjecture.junkdrawer import find_integer
 from hypothesis.internal.conjecture.pareto import NO_SCORE
 
@@ -168,15 +168,13 @@ class Optimiser:
                     return False
 
                 for _ in range(3):
-                    nodes = self.current_data.ir_nodes
+                    choices = self.current_data.choices
                     attempt_nodes = (
-                        nodes[: node.index]
-                        + (node.copy(with_value=new_value),)
-                        + nodes[node.index + 1 :]
+                        choices[: node.index] + (new_value,) + choices[node.index + 1 :]
                     )
                     attempt = self.engine.cached_test_function_ir(
                         attempt_nodes,
-                        extend=BUFFER_SIZE_IR - ir_size_nodes(attempt_nodes),
+                        extend=BUFFER_SIZE - ir_size(attempt_nodes),
                     )
 
                     if self.consider_new_data(attempt):
@@ -197,14 +195,14 @@ class Optimiser:
                         ex_attempt = attempt.examples[j]
                         if ex.ir_length == ex_attempt.ir_length:
                             continue  # pragma: no cover
-                        replacement = attempt.ir_nodes[
+                        replacement = attempt.choices[
                             ex_attempt.ir_start : ex_attempt.ir_end
                         ]
                         if self.consider_new_data(
                             self.engine.cached_test_function_ir(
-                                nodes[: node.index]
+                                choices[: node.index]
                                 + replacement
-                                + self.current_data.ir_nodes[ex.ir_end :]
+                                + self.current_data.choices[ex.ir_end :]
                             )
                         ):
                             return True
