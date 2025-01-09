@@ -1,3 +1,3 @@
 RELEASE_TYPE: patch
 
-Internal code refactoring.
+More internal code refactoring.

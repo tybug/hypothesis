@@ -18,6 +18,22 @@ Hypothesis 6.x
 
     .. include:: ../RELEASE.rst
 
+.. _v6.123.12:
+
+---------------------
+6.123.12 - 2025-01-09
+---------------------
+
+:class:`~hypothesis.database.DirectoryBasedExampleDatabase` now creates files representing database entries atomically, avoiding a very brief intermediary state where a file could be created but not yet written to.
+
+.. _v6.123.11:
+
+---------------------
+6.123.11 - 2025-01-09
+---------------------
+
+Internal code refactoring.
+
 .. _v6.123.10:
 
 ---------------------
