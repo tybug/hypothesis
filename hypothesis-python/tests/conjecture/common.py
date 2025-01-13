@@ -46,20 +46,16 @@ def interesting_origin(n: Optional[int] = None) -> InterestingOrigin:
     """
     Creates and returns an InterestingOrigin, parameterized by n, such that
     interesting_origin(n) == interesting_origin(m) iff n = m.
+
+    Since n=None may by chance concide with an explicitly-passed value of n, I
+    recommend not mixing interesting_origin() and interesting_origin(n) in the
+    same test.
     """
     try:
         int("not an int")
     except Exception as e:
         origin = InterestingOrigin.from_exception(e)
-        if n is None:
-            return origin
-        return InterestingOrigin(
-            exc_type=origin.exc_type,
-            filename=origin.filename,
-            lineno=n,
-            context=origin.context,
-            group_elems=origin.group_elems,
-        )
+        return origin._replace(lineno=n if n is not None else origin.lineno)
 
 
 def run_to_data(f):
@@ -145,6 +141,28 @@ def clamped_shrink_towards(kwargs):
 
 
 @st.composite
+def integer_weights(draw, min_value=None, max_value=None):
+    # Sampler doesn't play well with super small floats, so exclude them
+    weights = draw(
+        st.dictionaries(
+            st.integers(min_value=min_value, max_value=max_value),
+            st.floats(0.001, 1),
+            min_size=1,
+            max_size=255,
+        )
+    )
+    # invalid to have a weighting that disallows all possibilities
+    assume(sum(weights.values()) != 0)
+    # re-normalize probabilities to sum to some arbitrary target < 1
+    target = draw(st.floats(0.001, 0.999))
+    factor = target / sum(weights.values())
+    weights = {k: v * factor for k, v in weights.items()}
+    # float rounding error can cause this to fail.
+    assume(0.001 <= sum(weights.values()) <= 0.999)
+    return weights
+
+
+@st.composite
 def integer_kwargs(
     draw,
     *,
@@ -186,22 +204,7 @@ def integer_kwargs(
         min_val = max(min_value, forced) if forced is not None else min_value
         max_value = draw(st.integers(min_value=min_val))
 
-        # Sampler doesn't play well with super small floats, so exclude them
-        weights = draw(
-            st.dictionaries(
-                st.integers(min_value=min_value, max_value=max_value),
-                st.floats(0.001, 1),
-                max_size=255,
-            )
-        )
-        # invalid to have a weighting that disallows all possibilities
-        assume(sum(weights.values()) != 0)
-        # re-normalize probabilities to sum to some arbitrary target < 1
-        target = draw(st.floats(0.001, 0.999))
-        factor = target / sum(weights.values())
-        weights = {k: v * factor for k, v in weights.items()}
-        # float rounding error can cause this to fail.
-        assume(sum(weights.values()) == target)
+        weights = draw(integer_weights(min_value, max_value))
     else:
         if use_min_value:
             min_value = draw(st.integers(max_value=forced))
@@ -378,10 +381,11 @@ def draw_value(ir_type, kwargs):
 
 
 @st.composite
-def ir_nodes(draw, *, was_forced=None, ir_type=None):
-    if ir_type is None:
+def ir_nodes(draw, *, was_forced=None, ir_types=None):
+    if ir_types is None:
         (ir_type, kwargs) = draw(ir_types_and_kwargs())
     else:
+        ir_type = draw(st.sampled_from(ir_types))
         kwargs = draw(kwargs_strategy(ir_type))
     # ir nodes don't include forced in their kwargs. see was_forced attribute
     del kwargs["forced"]

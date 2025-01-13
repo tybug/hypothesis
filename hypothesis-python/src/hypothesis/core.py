@@ -23,7 +23,7 @@ import unittest
 import warnings
 import zlib
 from collections import defaultdict
-from collections.abc import Coroutine, Generator, Hashable
+from collections.abc import Coroutine, Generator, Hashable, Sequence
 from functools import partial
 from random import Random
 from typing import (
@@ -50,6 +50,7 @@ from hypothesis._settings import (
     settings as Settings,
 )
 from hypothesis.control import BuildContext
+from hypothesis.database import ir_from_bytes, ir_to_bytes
 from hypothesis.errors import (
     BackendCannotProceed,
     DeadlineExceeded,
@@ -75,6 +76,7 @@ from hypothesis.internal.compat import (
     get_type_hints,
     int_from_bytes,
 )
+from hypothesis.internal.conjecture.choice import ChoiceT
 from hypothesis.internal.conjecture.data import (
     ConjectureData,
     PrimitiveProvider,
@@ -319,27 +321,28 @@ def reproduce_failure(version: str, blob: bytes) -> Callable[[TestFunc], TestFun
     return accept
 
 
-def encode_failure(buffer):
-    buffer = bytes(buffer)
-    compressed = zlib.compress(buffer)
-    if len(compressed) < len(buffer):
-        buffer = b"\1" + compressed
+def encode_failure(choices):
+    blob = ir_to_bytes(choices)
+    compressed = zlib.compress(blob)
+    if len(compressed) < len(blob):
+        blob = b"\1" + compressed
     else:
-        buffer = b"\0" + buffer
-    return base64.b64encode(buffer)
+        blob = b"\0" + blob
+    return base64.b64encode(blob)
 
 
-def decode_failure(blob):
+def decode_failure(blob: bytes) -> Sequence[ChoiceT]:
     try:
-        buffer = base64.b64decode(blob)
+        decoded = base64.b64decode(blob)
     except Exception:
         raise InvalidArgument(f"Invalid base64 encoded string: {blob!r}") from None
-    prefix = buffer[:1]
+
+    prefix = decoded[:1]
     if prefix == b"\0":
-        return buffer[1:]
+        decoded = decoded[1:]
     elif prefix == b"\1":
         try:
-            return zlib.decompress(buffer[1:])
+            decoded = zlib.decompress(decoded[1:])
         except zlib.error as err:
             raise InvalidArgument(
                 f"Invalid zlib compression for blob {blob!r}"
@@ -348,6 +351,13 @@ def decode_failure(blob):
         raise InvalidArgument(
             f"Could not decode blob {blob!r}: Invalid start byte {prefix!r}"
         )
+
+    try:
+        choices = ir_from_bytes(decoded)
+    except Exception:
+        raise InvalidArgument(f"Invalid serialized choice sequence for blob {blob!r}")
+
+    return choices
 
 
 def _invalid(message, *, exc=InvalidArgument, test, given_kwargs):
@@ -939,19 +949,27 @@ class StateForActualGivenExecution:
                     printer.text("Trying example:")
 
                 if self.print_given_args:
-                    printer.text(" ")
-                    printer.repr_call(
-                        test.__name__,
-                        args,
-                        kwargs,
-                        force_split=True,
-                        arg_slices=argslices,
-                        leading_comment=(
-                            "# " + context.data.slice_comments[(0, 0)]
-                            if (0, 0) in context.data.slice_comments
-                            else None
-                        ),
-                    )
+                    if data.provider.avoid_realization and not print_example:
+                        # we can do better here by adding
+                        # avoid_realization: bool = False to repr_call, which
+                        # maintains args/kwargs structure (and comments) but shows
+                        # <symbolic> in place of values. For now, this at least
+                        # avoids realization with verbosity <= verbose.
+                        printer.text(" <symbolics>")
+                    else:
+                        printer.text(" ")
+                        printer.repr_call(
+                            test.__name__,
+                            args,
+                            kwargs,
+                            force_split=True,
+                            arg_slices=argslices,
+                            leading_comment=(
+                                "# " + context.data.slice_comments[(0, 0)]
+                                if (0, 0) in context.data.slice_comments
+                                else None
+                            ),
+                        )
                 report(printer.getvalue())
 
             if TESTCASE_CALLBACKS:
@@ -1038,15 +1056,19 @@ class StateForActualGivenExecution:
     def _flaky_replay_to_failure(
         self, err: FlakyReplay, context: BaseException
     ) -> FlakyFailure:
+        # Note that in the mark_interesting case, _context_ itself
+        # is part of err._interesting_examples - but it's not in
+        # _runner.interesting_examples - this is fine, as the context
+        # (i.e., immediate exception) is appended.
         interesting_examples = [
             self._runner.interesting_examples[io]
             for io in err._interesting_origins
-            if io
+            if io in self._runner.interesting_examples
         ]
         exceptions = [
             ie.extra_information._expected_exception for ie in interesting_examples
         ]
-        exceptions.append(context)  # the offending assume (or whatever)
+        exceptions.append(context)  # the immediate exception
         return FlakyFailure(err.reason, exceptions)
 
     def _execute_once_for_engine(self, data: ConjectureData) -> None:
@@ -1101,7 +1123,19 @@ class StateForActualGivenExecution:
             # If an unhandled (i.e., non-Hypothesis) error was raised by
             # Hypothesis-internal code, re-raise it as a fatal error instead
             # of treating it as a test failure.
-            filepath = traceback.extract_tb(e.__traceback__)[-1][0]
+            if isinstance(e, BaseExceptionGroup) and len(e.exceptions) == 1:
+                # When a naked exception is implicitly wrapped in an ExceptionGroup
+                # due to a re-raising "except*", the ExceptionGroup is constructed in
+                # the caller's stack frame (see #4183). This workaround is specifically
+                # for implicit wrapping of naked exceptions by "except*", since explicit
+                # raising of ExceptionGroup gets the proper traceback in the first place
+                # - there's no need to handle hierarchical groups here, at least if no
+                # such implicit wrapping happens inside hypothesis code (we only care
+                # about the hypothesis-or-not distinction).
+                tb = e.exceptions[0].__traceback__ or e.__traceback__
+            else:
+                tb = e.__traceback__
+            filepath = traceback.extract_tb(tb)[-1][0]
             if is_hypothesis_file(filepath) and not isinstance(e, HypothesisException):
                 raise
 
@@ -1129,7 +1163,11 @@ class StateForActualGivenExecution:
                 if interesting_origin[0] == DeadlineExceeded:
                     self.failed_due_to_deadline = True
                     self.explain_traces.clear()
-                data.mark_interesting(interesting_origin)
+                try:
+                    data.mark_interesting(interesting_origin)
+                except FlakyReplay as err:
+                    raise self._flaky_replay_to_failure(err, e) from None
+
         finally:
             # Conditional here so we can save some time constructing the payload; in
             # other cases (without coverage) it's cheap enough to do that regardless.
@@ -1382,7 +1420,7 @@ class StateForActualGivenExecution:
                     fragments.append(
                         "\nYou can reproduce this example by temporarily adding "
                         "@reproduce_failure(%r, %r) as a decorator on your test case"
-                        % (__version__, encode_failure(falsifying_example.buffer))
+                        % (__version__, encode_failure(falsifying_example.choices))
                     )
                 # Mostly useful for ``find`` and ensuring that objects that
                 # hold on to a reference to ``data`` know that it's now been
@@ -1685,7 +1723,7 @@ def given(
                     )
                 try:
                     state.execute_once(
-                        ConjectureData.for_buffer(decode_failure(failure)),
+                        ConjectureData.for_choices(decode_failure(failure)),
                         print_example=True,
                         is_final=True,
                     )
