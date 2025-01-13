@@ -98,8 +98,10 @@ def shortlex(s):
 def corpus_key(b):
     decoded = keyed_ir_from_bytes(b)
     if decoded is None:
-        # put invalid entries after everything else
-        return (1,)
+        # put invalid entries after everything else. The shortlex ordering for
+        # invalid entries isn't necessary, but it does make iteration order
+        # deterministic for tests, which is nice.
+        return (1, shortlex(b))
     key, _choices = decoded
     # if valid, order by its complexity key
     return (0, key)

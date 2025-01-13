@@ -18,6 +18,23 @@ Hypothesis 6.x
 
     .. include:: ../RELEASE.rst
 
+.. _v6.123.17:
+
+---------------------
+6.123.17 - 2025-01-13
+---------------------
+
+This patch improves certain corner cases for reporting of flaky errors
+(:issue:`4183` and :issue:`4228`).
+
+.. _v6.123.16:
+
+---------------------
+6.123.16 - 2025-01-13
+---------------------
+
+Improves an edge case in one of our integer and float shrinking passes.
+
 .. _v6.123.15:
 
 ---------------------
