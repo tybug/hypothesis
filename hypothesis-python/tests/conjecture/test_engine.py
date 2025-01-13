@@ -1716,7 +1716,9 @@ def test_discards_invalid_db_entries(key_name):
         db = InMemoryExampleDatabase()
         runner = ConjectureRunner(
             test,
-            settings=settings(database=db),
+            # stop IN_COVERAGE_TESTS from overriding max_examples, which changes
+            # db behavior
+            settings=settings(database=db, max_examples=100),
             database_key=b"stuff",
         )
         key = getattr(runner, key_name)
@@ -1748,7 +1750,7 @@ def test_discards_invalid_db_entries_pareto():
         db = InMemoryExampleDatabase()
         runner = ConjectureRunner(
             test,
-            settings=settings(database=db),
+            settings=settings(database=db, max_examples=100),
             database_key=b"stuff",
         )
         for n in range(1, 5):
