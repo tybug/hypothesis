@@ -1703,3 +1703,60 @@ def test_skips_secondary_if_interesting_is_found():
         )
     runner.reuse_existing_examples()
     assert runner.call_count == 10
+
+
+@pytest.mark.parametrize("key_name", ["database_key", "secondary_key"])
+def test_discards_invalid_db_entries(key_name):
+    with deterministic_PRNG():
+
+        def test(data):
+            data.draw_integer()
+            data.mark_interesting()
+
+        db = InMemoryExampleDatabase()
+        runner = ConjectureRunner(
+            test,
+            settings=settings(database=db),
+            database_key=b"stuff",
+        )
+        key = getattr(runner, key_name)
+        valid = keyed_ir_to_bytes(ir(1))
+        db.save(key, valid)
+        for n in range(1, 5):
+            b = bytes([n])
+            # save a bunch of invalid entries under the database key. start at 1
+            # because b'\x00' actually is a valid serialization of choices
+            assert keyed_ir_from_bytes(b) is None
+            db.save(key, b)
+
+        assert len(set(db.fetch(key))) == 5
+        # this will clear out the invalid entries and use the valid one
+        runner.reuse_existing_examples()
+        runner.clear_secondary_key()
+
+        assert set(db.fetch(runner.database_key)) == {valid}
+        assert runner.call_count == 1
+
+
+def test_discards_invalid_db_entries_pareto():
+    with deterministic_PRNG():
+
+        def test(data):
+            data.draw_integer()
+            data.mark_interesting()
+
+        db = InMemoryExampleDatabase()
+        runner = ConjectureRunner(
+            test,
+            settings=settings(database=db),
+            database_key=b"stuff",
+        )
+        for n in range(1, 5):
+            db.save(runner.pareto_key, bytes([n]))
+
+        assert len(set(db.fetch(runner.pareto_key))) == 4
+        runner.reuse_existing_examples()
+
+        assert not set(db.fetch(runner.database_key))
+        assert not set(db.fetch(runner.pareto_key))
+        assert runner.call_count == 0

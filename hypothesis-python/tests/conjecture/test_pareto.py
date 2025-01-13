@@ -174,8 +174,8 @@ def test_stops_loading_pareto_front_if_interesting():
     with deterministic_PRNG():
 
         def test(data):
-            data.draw_integer(0, 2**8 - 1)
-            data.draw_integer(0, 2**8 - 1)
+            data.draw_integer()
+            data.draw_integer()
             data.mark_interesting()
 
         db = InMemoryExampleDatabase()
