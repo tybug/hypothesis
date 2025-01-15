@@ -470,7 +470,7 @@ class Shrinker:
         """
 
         try:
-            self.initial_coarse_reduction()
+            # self.initial_coarse_reduction()
             self.greedy_shrink()
         except StopShrinking:
             # If we stopped shrinking because we're making slow progress (instead of
@@ -663,7 +663,7 @@ class Shrinker:
         """
         self.fixate_shrink_passes(
             [
-                "try_trivial_examples",
+                # "try_trivial_examples",
                 node_program("X" * 5),
                 node_program("X" * 4),
                 node_program("X" * 3),
