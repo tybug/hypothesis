@@ -1877,9 +1877,7 @@ def given(
                         known is None
                         or sort_key_ir(data.ir_nodes) <= sort_key_ir(known)
                     ):
-                        settings.database.save(
-                            database_key, keyed_ir_to_bytes(data.ir_nodes)
-                        )
+                        settings.database.save(database_key, ir_to_bytes(data.choices))
                         minimal_failures[data.interesting_origin] = data.ir_nodes
                     raise
                 return bytes(data.buffer)

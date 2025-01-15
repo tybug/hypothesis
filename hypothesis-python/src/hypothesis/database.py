@@ -806,92 +806,15 @@ def _ir_from_bytes(buffer: bytes, /) -> tuple[ChoiceT, ...]:
 
 
 def ir_from_bytes(buffer: bytes, /) -> Optional[tuple[ChoiceT, ...]]:
-    """Deserialize a bytestring to a tuple of IR elements. Inverts ir_to_bytes."""
+    """
+    Deserialize a bytestring to a tuple of choices. Inverts ir_to_bytes.
+
+    Returns None if the given bytestring is not a valid serialization of choice
+    sequences.
+    """
     try:
         return _ir_from_bytes(buffer)
     except Exception:
         # deserialization error, eg because our format changed or someone put junk
         # data in the db.
-        return None
-
-
-def _pack_uleb128(value: int) -> bytes:
-    """
-    Serialize an integer into variable-length bytes. For each byte, the first 7
-    bits represent (part of) the integer, while the last bit indicates whether the
-    integer continues into the next byte.
-
-    https://en.wikipedia.org/wiki/LEB128
-    """
-    parts = bytearray()
-    assert value >= 0
-    while True:
-        # chop off 7 bits
-        byte = value & ((1 << 7) - 1)
-        value >>= 7
-        # set the continuation bit if we have more left
-        if value:
-            byte |= 1 << 7
-
-        parts.append(byte)
-        if not value:
-            break
-    return bytes(parts)
-
-
-def _unpack_uleb128(buffer: bytes) -> tuple[int, int]:
-    """
-    Inverts _pack_uleb128, and also returns the index at which at which we stopped
-    reading.
-    """
-    value = 0
-    for i, byte in enumerate(buffer):
-        n = byte & ((1 << 7) - 1)
-        value |= n << (i * 7)
-
-        if not byte >> 7:
-            break
-    return (i + 1, value)
-
-
-def keyed_ir_to_bytes(nodes: Sequence[IRNode]) -> bytes:
-    """
-    Like ir_to_bytes, but also encodes the complexity of each choice using
-    choice_to_index. This complexity is used when e.g. checking if a choice sequence
-    is a shrink.
-    """
-    # we first serialize the number of choices as a uleb, then the complexity of each
-    # choice as a uleb, then append the standard ir_to_bytes of the choices.
-    parts = []
-    indexes = [choice_to_index(node.value, node.kwargs) for node in nodes]
-    choices = [node.value for node in nodes]
-
-    parts.append(_pack_uleb128(len(indexes)))
-    for index in indexes:
-        parts.append(_pack_uleb128(index))
-
-    return b"".join(parts) + ir_to_bytes(choices)
-
-
-def _keyed_ir_from_bytes(buffer: bytes, /) -> IndexedChoices:
-    indexes: list[int] = []
-    idx, count_choices = _unpack_uleb128(buffer)
-    for _ in range(count_choices):
-        idx_part, index = _unpack_uleb128(buffer[idx:])
-        idx += idx_part
-        indexes.append(index)
-
-    choices = _ir_from_bytes(buffer[idx:])
-    key = (len(indexes), tuple(indexes))
-    return (key, choices)
-
-
-# this cache is not the result of any profiling, but we often sort a binary corpus
-# using this key (which requires deserializing) and then iterate over it, deserializing
-# again to retrieve the choices. Briefly caching the result seems worthwhile.
-@lru_cache(maxsize=128)
-def keyed_ir_from_bytes(buffer: bytes, /) -> Optional[IndexedChoices]:
-    try:
-        return _keyed_ir_from_bytes(buffer)
-    except Exception:
         return None

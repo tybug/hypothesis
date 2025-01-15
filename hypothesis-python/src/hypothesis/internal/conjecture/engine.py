@@ -34,7 +34,7 @@ import attr
 
 from hypothesis import HealthCheck, Phase, Verbosity, settings as Settings
 from hypothesis._settings import local_settings
-from hypothesis.database import ExampleDatabase, keyed_ir_from_bytes, keyed_ir_to_bytes
+from hypothesis.database import ExampleDatabase, ir_from_bytes, ir_to_bytes
 from hypothesis.errors import (
     BackendCannotProceed,
     FlakyReplay,
@@ -44,7 +44,12 @@ from hypothesis.errors import (
 )
 from hypothesis.internal.cache import LRUReusedCache
 from hypothesis.internal.compat import NotRequired, TypeAlias, TypedDict, ceil, override
-from hypothesis.internal.conjecture.choice import ChoiceKwargsT, ChoiceT, choices_key
+from hypothesis.internal.conjecture.choice import (
+    ChoiceKeyT,
+    ChoiceKwargsT,
+    ChoiceT,
+    choices_key,
+)
 from hypothesis.internal.conjecture.data import (
     AVAILABLE_PROVIDERS,
     ConjectureData,
@@ -93,18 +98,6 @@ Ls: TypeAlias = list["Ls | int"]
 
 def shortlex(s):
     return (len(s), s)
-
-
-def corpus_key(b):
-    decoded = keyed_ir_from_bytes(b)
-    if decoded is None:
-        # put invalid entries after everything else. The shortlex ordering for
-        # invalid entries isn't necessary, but it does make iteration order
-        # deterministic for tests, which is nice.
-        return (1, shortlex(b))
-    key, _choices = decoded
-    # if valid, order by its complexity key
-    return (0, key)
 
 
 @attr.s
@@ -361,7 +354,7 @@ class ConjectureRunner:
                     # correct engine.
                     raise
 
-    def _cache_key(self, choices: Sequence[ChoiceT]) -> tuple[ChoiceT, ...]:
+    def _cache_key(self, choices: Sequence[ChoiceT]) -> tuple[ChoiceKeyT, ...]:
         return choices_key(choices)
 
     def _cache(self, data: ConjectureData) -> None:
@@ -483,7 +476,7 @@ class ConjectureRunner:
             data.freeze()
             return
         except BaseException:
-            self.save_choices(data.ir_nodes)
+            self.save_choices(data.choices)
             raise
         finally:
             # No branch, because if we're interrupted we always raise
@@ -538,7 +531,7 @@ class ConjectureRunner:
             and self.pareto_front is not None
             and self.pareto_front.add(data.as_result())
         ):
-            self.save_choices(data.ir_nodes, sub_key=b"pareto")
+            self.save_choices(data.choices, sub_key=b"pareto")
 
         assert len(data.buffer) <= BUFFER_SIZE
 
@@ -617,12 +610,12 @@ class ConjectureRunner:
             else:
                 if sort_key_ir(data.ir_nodes) < sort_key_ir(existing.ir_nodes):
                     self.shrinks += 1
-                    self.downgrade_buffer(keyed_ir_to_bytes(existing.ir_nodes))
+                    self.downgrade_buffer(ir_to_bytes(existing.choices))
                     self.__data_cache.unpin(existing.buffer)
                     changed = True
 
             if changed:
-                self.save_choices(data.ir_nodes)
+                self.save_choices(data.choices)
                 self.interesting_examples[key] = data.as_result()  # type: ignore
                 self.__data_cache.pin(data.buffer, data.as_result())
                 self.shrunk_examples.discard(key)
@@ -667,7 +660,7 @@ class ConjectureRunner:
         self.record_for_health_check(data)
 
     def on_pareto_evict(self, data: ConjectureData) -> None:
-        self.settings.database.delete(self.pareto_key, keyed_ir_to_bytes(data.ir_nodes))
+        self.settings.database.delete(self.pareto_key, ir_to_bytes(data.choices))
 
     def generate_novel_prefix(self) -> tuple[ChoiceT, ...]:
         """Uses the tree to proactively generate a starting sequence of bytes
@@ -752,13 +745,13 @@ class ConjectureRunner:
             )
 
     def save_choices(
-        self, nodes: Sequence[IRNode], sub_key: Optional[bytes] = None
+        self, choices: Sequence[ChoiceT], sub_key: Optional[bytes] = None
     ) -> None:
         if self.settings.database is not None:
             key = self.sub_key(sub_key)
             if key is None:
                 return
-            self.settings.database.save(key, keyed_ir_to_bytes(nodes))
+            self.settings.database.save(key, ir_to_bytes(choices))
 
     def downgrade_buffer(self, buffer: Union[bytes, bytearray]) -> None:
         if self.settings.database is not None and self.database_key is not None:
@@ -848,7 +841,7 @@ class ConjectureRunner:
             # sample the secondary corpus to a more manageable size.
 
             corpus = sorted(
-                self.settings.database.fetch(self.database_key), key=corpus_key
+                self.settings.database.fetch(self.database_key), key=shortlex
             )
             factor = 0.1 if (Phase.generate in self.settings.phases) else 1
             desired_size = max(2, ceil(factor * self.settings.max_examples))
@@ -863,7 +856,7 @@ class ConjectureRunner:
                     extra = extra_corpus
                 else:
                     extra = self.random.sample(extra_corpus, shortfall)
-                extra.sort(key=corpus_key)
+                extra.sort(key=shortlex)
                 corpus.extend(extra)
 
             # We want a fast path where every primary entry in the database was
@@ -874,12 +867,11 @@ class ConjectureRunner:
             for i, existing in enumerate(corpus):
                 if i >= primary_corpus_size and found_interesting_in_primary:
                     break
-                decoded = keyed_ir_from_bytes(existing)
-                if decoded is None:
+                choices = ir_from_bytes(existing)
+                if choices is None:
                     # clear out any keys which fail deserialization
                     self.settings.database.delete(self.database_key, existing)
                     continue
-                _key, choices = decoded
                 data = self.cached_test_function_ir(choices, extend=BUFFER_SIZE)
                 if data.status != Status.INTERESTING:
                     self.settings.database.delete(self.database_key, existing)
@@ -908,14 +900,13 @@ class ConjectureRunner:
                 pareto_corpus = list(self.settings.database.fetch(self.pareto_key))
                 if len(pareto_corpus) > desired_extra:
                     pareto_corpus = self.random.sample(pareto_corpus, desired_extra)
-                pareto_corpus.sort(key=corpus_key)
+                pareto_corpus.sort(key=shortlex)
 
                 for existing in pareto_corpus:
-                    decoded = keyed_ir_from_bytes(existing)
-                    if decoded is None:
+                    choices = ir_from_bytes(existing)
+                    if choices is None:
                         self.settings.database.delete(self.pareto_key, existing)
                         continue
-                    _key, choices = decoded
                     data = self.cached_test_function_ir(choices, extend=BUFFER_SIZE)
                     if data not in self.pareto_front:
                         self.settings.database.delete(self.pareto_key, existing)
@@ -1427,18 +1418,19 @@ class ConjectureRunner:
             # It's not worth trying the primary corpus because we already
             # tried all of those in the initial phase.
             corpus = sorted(
-                self.settings.database.fetch(self.secondary_key), key=corpus_key
+                self.settings.database.fetch(self.secondary_key), key=shortlex
             )
             for c in corpus:
-                decoded = keyed_ir_from_bytes(c)
-                if decoded is None:
+                choices = ir_from_bytes(c)
+                if choices is None:
                     self.settings.database.delete(self.secondary_key, c)
                     continue
-                choices_sort_key, choices = decoded
-                primary = {v.ir_nodes for v in self.interesting_examples.values()}
-                cap = max(map(sort_key_ir, primary))
+                primary = {
+                    ir_to_bytes(v.choices) for v in self.interesting_examples.values()
+                }
+                cap = max(map(shortlex, primary))
 
-                if choices_sort_key > cap:
+                if shortlex(c) > cap:
                     break
                 else:
                     self.cached_test_function_ir(choices)
