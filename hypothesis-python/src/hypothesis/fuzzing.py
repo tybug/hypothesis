@@ -66,7 +66,7 @@ data_to_draws_unsaved: Mapping[bytes, list["Draw"]] = LRUCache(
 # stores bounds for interesting / actual corpus data. unbounded
 data_to_draws: dict[bytes, list["Draw"]] = {}
 
-collect_diagnostic = False
+collect_child_to_parents = False
 child_to_parents = defaultdict(list)
 
 
@@ -1248,8 +1248,8 @@ def custom_mutator(data: bytes, *, random: Random, blackbox: bool) -> bytes:
         stats["after"] = [_make_serializable(draw.value) for draw in mutated_draws]
         statistics["per_item_stats"].append(stats)
 
-    if collect_diagnostic:
-        child_to_parents[encode_buffer(data)].append(encode_buffer(serialized_ir))
+    if collect_child_to_parents:
+        child_to_parents[data].append(serialized_ir)
 
     assert len(serialized_ir) <= MAX_SERIALIZED_SIZE
     return serialized_ir
