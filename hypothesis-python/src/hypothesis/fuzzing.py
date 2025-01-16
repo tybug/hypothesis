@@ -723,7 +723,7 @@ class NodeMutator(Mutator):
 
         def find_target_starts(
             size: int, *, max_targets: int, attempts: int
-        ) -> int | None:
+        ) -> list[int]:
             target_starts = set()
             for _ in range(attempts):
                 target_start = _try_find_target_start(size)
@@ -1154,7 +1154,7 @@ def _size_cap(n):
     return size
 
 
-def _fresh_input(*, size_cap: int | None = None):
+def _fresh_input(*, size_cap: int | None = None) -> bytes:
     # size_cap must fit inside a single byte, and 0 is our INTERPRET_IR marker
     # so it can't be that
     if size_cap is not None:
