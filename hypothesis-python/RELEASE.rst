@@ -1,5 +1,3 @@
-RELEASE_TYPE: minor
+RELEASE_TYPE: patch
 
-The :doc:`Hypothesis example database <database>` now uses a new internal format to store examples. The new format is not compatible with the previous format, so any old stored counterexamples will be silently discarded.
-
-If you are replaying counterexamples using an external database such as :class:`~hypothesis.database.GitHubArtifactDatabase`, this means the counterexample must have been found after this version in the external database to successfully replay locally. In short, the Hypothesis versions of the local and remote databases should be both before or both after this version.
+:ref:`fuzz_one_input <fuzz_one_input>` is now implemented using an :ref:`alternative backend <alternative-backends>`. This brings the interpretation of the fuzzer-provided bytestring closer to the fuzzer mutations, allowing the mutations to work more reliably. We hope to use this backend functionality to improve fuzzing integration (see e.g. https://github.com/google/atheris/issues/20) in the future!
