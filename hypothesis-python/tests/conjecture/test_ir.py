@@ -44,10 +44,7 @@ from hypothesis.internal.conjecture.datatree import (
     all_children,
     compute_max_children,
 )
-from hypothesis.internal.conjecture.engine import (
-    BUFFER_SIZE_IR,
-    truncate_choices_to_size,
-)
+from hypothesis.internal.conjecture.engine import BUFFER_SIZE, truncate_choices_to_size
 from hypothesis.internal.floats import SMALLEST_SUBNORMAL, next_down, next_up
 from hypothesis.internal.intervalsets import IntervalSet
 
@@ -321,7 +318,7 @@ def test_data_with_changed_forced_value(node):
     # This is actually fine; we'll just ignore the forced node (v1) and return
     # what the draw expects (v2).
 
-    data = ConjectureData.for_choices([node.value], max_length=BUFFER_SIZE_IR)
+    data = ConjectureData.for_choices([node.value], max_length=BUFFER_SIZE)
 
     draw_func = getattr(data, f"draw_{node.ir_type}")
     kwargs = deepcopy(node.kwargs)
@@ -540,21 +537,17 @@ def test_forced_nodes_are_trivial(node):
             kwargs=integer_kw(max_value=10, shrink_towards=1),
             was_forced=False,
         ),
-        # TODO_IR: this *is* trivial by node.trivial, but not by shrinking, because
-        # the buffer ordering doesn't yet consider shrink_towards for unbounded
-        # integers this will be fixed (and this test case can be uncommented) when
-        # we move shrink ordering to the typed choice sequence.
-        # IRNode(
-        #     ir_type="integer",
-        #     value=1,
-        #     kwargs={
-        #         "min_value": None,
-        #         "max_value": None,
-        #         "weights": None,
-        #         "shrink_towards": 1,
-        #     },
-        #     was_forced=False,
-        # ),
+        IRNode(
+            ir_type="integer",
+            value=1,
+            kwargs={
+                "min_value": None,
+                "max_value": None,
+                "weights": None,
+                "shrink_towards": 1,
+            },
+            was_forced=False,
+        ),
     ],
 )
 def test_trivial_nodes(node):
@@ -709,7 +702,7 @@ def test_node_template_to_overrun():
 def test_node_template_single_node_overruns():
     # test for when drawing a single node takes more than BUFFER_SIZE, while in
     # the NodeTemplate case
-    data = ConjectureData.for_choices((NodeTemplate("simplest", size=BUFFER_SIZE_IR),))
+    data = ConjectureData.for_choices((NodeTemplate("simplest", size=BUFFER_SIZE),))
     with pytest.raises(StopTest):
         data.draw_bytes(10_000, 10_000)
 
@@ -720,7 +713,7 @@ def test_node_template_single_node_overruns():
 def test_node_template_simplest_is_actually_trivial(node):
     # TODO_IR node.trivial is sound but not complete for floats.
     assume(node.ir_type != "float")
-    data = ConjectureData.for_choices((NodeTemplate("simplest", size=BUFFER_SIZE_IR),))
+    data = ConjectureData.for_choices((NodeTemplate("simplest", size=BUFFER_SIZE),))
     getattr(data, f"draw_{node.ir_type}")(**node.kwargs)
     assert len(data.ir_nodes) == 1
     assert data.ir_nodes[0].trivial

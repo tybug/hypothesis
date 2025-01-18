@@ -37,7 +37,7 @@ from hypothesis.internal.conjecture import engine as engine_module
 from hypothesis.internal.conjecture.data import ConjectureData, Overrun, Status, ir_size
 from hypothesis.internal.conjecture.datatree import compute_max_children
 from hypothesis.internal.conjecture.engine import (
-    BUFFER_SIZE_IR,
+    BUFFER_SIZE,
     MIN_TEST_CALLS,
     ConjectureRunner,
     ExitReason,
@@ -217,7 +217,7 @@ def test_can_navigate_to_a_valid_example():
         data.mark_interesting()
 
     runner = ConjectureRunner(f, settings=settings(max_examples=5000, database=None))
-    with buffer_size_limit(2):
+    with buffer_size_limit(5):
         runner.run()
     assert runner.interesting_examples
 
@@ -1506,19 +1506,6 @@ def test_does_not_cache_extended_prefix_if_overrun():
         assert d2.status is Status.VALID
 
 
-def test_draw_bits_partly_from_prefix_and_partly_random():
-    # a draw_bits call which straddles the end of our prefix has a slightly
-    # different code branch.
-    def test(data):
-        # float consumes draw_bits(64)
-        data.draw_float()
-
-    with deterministic_PRNG():
-        runner = ConjectureRunner(test, settings=TEST_SETTINGS)
-        d = runner.cached_test_function(bytes(10), extend=100)
-        assert d.status == Status.VALID
-
-
 def test_can_be_set_to_ignore_limits():
     def test(data):
         data.draw_integer(0, 2**8 - 1)
@@ -1586,7 +1573,7 @@ def test_overruns_with_extend_are_not_cached(node):
 
     # cache miss
     data = runner.cached_test_function_ir(
-        [node.value], extend=BUFFER_SIZE_IR - ir_size([node])
+        [node.value], extend=BUFFER_SIZE - ir_size([node])
     )
     assert runner.call_count == 2
     assert data.status is Status.VALID

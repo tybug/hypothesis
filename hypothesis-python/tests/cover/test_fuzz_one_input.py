@@ -18,7 +18,6 @@ import pytest
 from hypothesis import Phase, given, settings, strategies as st
 from hypothesis.database import InMemoryExampleDatabase
 from hypothesis.errors import InvalidArgument
-from hypothesis.internal.conjecture.shrinker import sort_key
 
 
 @pytest.mark.parametrize(

@@ -44,12 +44,6 @@ def test_can_double_freeze():
     assert d.frozen
 
 
-def test_can_draw_zero_bytes():
-    x = ConjectureData.for_buffer(b"")
-    for _ in range(10):
-        assert x.draw_bytes(0, 0) == b""
-
-
 def test_draw_past_end_sets_overflow():
     d = ConjectureData.for_choices((True,))
 
@@ -74,11 +68,6 @@ def test_can_mark_interesting():
         d.mark_interesting()
     assert d.frozen
     assert d.status == Status.INTERESTING
-
-
-def test_drawing_zero_bits_is_free():
-    x = ConjectureData.for_buffer(b"")
-    assert x.draw_bits(0) == 0
 
 
 def test_can_mark_invalid():

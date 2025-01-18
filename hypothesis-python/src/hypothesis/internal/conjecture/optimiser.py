@@ -19,7 +19,7 @@ from hypothesis.internal.conjecture.data import (
     bits_to_bytes,
     ir_size,
 )
-from hypothesis.internal.conjecture.engine import BUFFER_SIZE_IR, ConjectureRunner
+from hypothesis.internal.conjecture.engine import BUFFER_SIZE, ConjectureRunner
 from hypothesis.internal.conjecture.junkdrawer import find_integer
 from hypothesis.internal.conjecture.pareto import NO_SCORE
 
@@ -175,7 +175,7 @@ class Optimiser:
                     )
                     attempt = self.engine.cached_test_function_ir(
                         attempt_choices,
-                        extend=BUFFER_SIZE_IR - ir_size(attempt_choices),
+                        extend=BUFFER_SIZE - ir_size(attempt_choices),
                     )
 
                     if self.consider_new_data(attempt):

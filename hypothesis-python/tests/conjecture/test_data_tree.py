@@ -249,32 +249,6 @@ def test_concluding_with_overrun_at_prefix_is_not_flaky():
         data.conclude_test(Status.OVERRUN)
 
 
-def test_changing_n_bits_is_flaky_in_prefix():
-    tree = DataTree()
-    data = ConjectureData.for_choices((1,), observer=tree.new_observer())
-    data.draw_integer(0, 1)
-    with pytest.raises(StopTest):
-        data.conclude_test(Status.INTERESTING)
-
-    data = ConjectureData.for_choices((1,), observer=tree.new_observer())
-    with pytest.raises(Flaky):
-        data.draw_integer(0, 3)
-
-
-def test_changing_n_bits_is_flaky_in_branch():
-    tree = DataTree()
-
-    for i in [0, 1]:
-        data = ConjectureData.for_choices((i,), observer=tree.new_observer())
-        data.draw_integer(0, 1)
-        with pytest.raises(StopTest):
-            data.conclude_test(Status.INTERESTING)
-
-    data = ConjectureData.for_choices((1,), observer=tree.new_observer())
-    with pytest.raises(Flaky):
-        data.draw_integer(0, 3)
-
-
 def test_extending_past_conclusion_is_flaky():
     tree = DataTree()
     data = ConjectureData.for_choices((True,), observer=tree.new_observer())

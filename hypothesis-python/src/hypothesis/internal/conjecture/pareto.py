@@ -300,7 +300,7 @@ class ParetoOptimiser:
             assert self.front
             i = min(i, len(self.front) - 1)
             target = self.front[i]
-            if target.buffer in seen:
+            if target.ir_nodes in seen:
                 i -= 1
                 continue
             assert target is not prev
@@ -328,7 +328,7 @@ class ParetoOptimiser:
                 return False
 
             shrunk = self.__engine.shrink(target, allow_transition=allow_transition)
-            seen.add(shrunk.buffer)
+            seen.add(shrunk.ir_nodes)
 
             # Note that the front may have changed shape arbitrarily when
             # we ran the shrinker. If it didn't change shape then this is

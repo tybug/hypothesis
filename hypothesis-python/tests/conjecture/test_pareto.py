@@ -105,7 +105,7 @@ def test_database_contains_only_pareto_front():
         assert len(values) == len(runner.pareto_front)
 
         for data in runner.pareto_front:
-            assert data.buffer in values
+            assert data.choices in values
             assert data in runner.pareto_front
 
         for k in values:

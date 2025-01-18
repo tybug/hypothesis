@@ -30,7 +30,6 @@ from tests.conjecture.common import (
     SOME_LABEL,
     float_kw,
     interesting_origin,
-    ir,
     ir_nodes,
     run_to_nodes,
     shrinking_from,
@@ -199,7 +198,9 @@ def test_permits_but_ignores_raising_order(monkeypatch):
         lambda runner: runner.cached_test_function_ir((1,)),
     )
 
-    monkeypatch.setattr(Shrinker, "shrink", lambda self: self.consider_new_tree(ir(2)))
+    monkeypatch.setattr(
+        Shrinker, "shrink", lambda self: self.engine.cached_test_function_ir([2])
+    )
 
     @run_to_nodes
     def nodes(data):

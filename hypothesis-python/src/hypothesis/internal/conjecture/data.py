@@ -34,7 +34,7 @@ import attr
 
 from hypothesis.errors import ChoiceTooLarge, Frozen, InvalidArgument, StopTest
 from hypothesis.internal.cache import LRUCache
-from hypothesis.internal.compat import add_note, floor, int_from_bytes, int_to_bytes
+from hypothesis.internal.compat import add_note
 from hypothesis.internal.conjecture.choice import (
     BooleanKWargs,
     BytesKWargs,
@@ -52,11 +52,7 @@ from hypothesis.internal.conjecture.choice import (
     choice_permitted,
 )
 from hypothesis.internal.conjecture.floats import float_to_lex, lex_to_float
-from hypothesis.internal.conjecture.junkdrawer import (
-    IntList,
-    gc_cumulative_time,
-    uniform,
-)
+from hypothesis.internal.conjecture.junkdrawer import IntList, gc_cumulative_time
 from hypothesis.internal.conjecture.utils import (
     INT_SIZES,
     INT_SIZES_SAMPLER,
@@ -711,7 +707,7 @@ class NodeTemplate:
     size: int = attr.ib()
 
     def __attrs_post_init__(self) -> None:
-        assert self.size > 0
+        assert self.size >= 0
 
 
 def ir_size(ir: Iterable[Union[IRNode, NodeTemplate, ChoiceT]]) -> int:
@@ -739,7 +735,6 @@ class ConjectureResult:
 
     status: Status = attr.ib()
     interesting_origin: Optional[InterestingOrigin] = attr.ib()
-    buffer: bytes = attr.ib()
     ir_nodes: tuple[IRNode, ...] = attr.ib(eq=False, repr=False)
     output: str = attr.ib()
     extra_information: Optional[ExtraInformation] = attr.ib()
@@ -750,11 +745,6 @@ class ConjectureResult:
     arg_slices: set[tuple[int, int]] = attr.ib(repr=False)
     slice_comments: dict[tuple[int, int], str] = attr.ib(repr=False)
     misaligned_at: Optional[MisalignedAt] = attr.ib(repr=False)
-
-    index: int = attr.ib(init=False)
-
-    def __attrs_post_init__(self) -> None:
-        self.index = len(self.buffer)
 
     def as_result(self) -> "ConjectureResult":
         return self
@@ -858,9 +848,6 @@ class PrimitiveProvider(abc.ABC):
     def draw_boolean(
         self,
         p: float = 0.5,
-        *,
-        forced: Optional[bool] = None,
-        fake_forced: bool = False,
     ) -> bool:
         raise NotImplementedError
 
@@ -873,8 +860,6 @@ class PrimitiveProvider(abc.ABC):
         # weights are for choosing an element index from a bounded range
         weights: Optional[dict[int, float]] = None,
         shrink_towards: int = 0,
-        forced: Optional[int] = None,
-        fake_forced: bool = False,
     ) -> int:
         raise NotImplementedError
 
@@ -890,8 +875,6 @@ class PrimitiveProvider(abc.ABC):
         # future.
         # width: Literal[16, 32, 64] = 64,
         # exclude_min and exclude_max handled higher up,
-        forced: Optional[float] = None,
-        fake_forced: bool = False,
     ) -> float:
         raise NotImplementedError
 
@@ -902,8 +885,6 @@ class PrimitiveProvider(abc.ABC):
         *,
         min_size: int = 0,
         max_size: int = COLLECTION_DEFAULT_MAX_SIZE,
-        forced: Optional[str] = None,
-        fake_forced: bool = False,
     ) -> str:
         raise NotImplementedError
 
@@ -912,9 +893,6 @@ class PrimitiveProvider(abc.ABC):
         self,
         min_size: int = 0,
         max_size: int = COLLECTION_DEFAULT_MAX_SIZE,
-        *,
-        forced: Optional[bytes] = None,
-        fake_forced: bool = False,
     ) -> bytes:
         raise NotImplementedError
 
@@ -949,112 +927,10 @@ class HypothesisProvider(PrimitiveProvider):
     def draw_boolean(
         self,
         p: float = 0.5,
-        *,
-        forced: Optional[bool] = None,
-        fake_forced: bool = False,
     ) -> bool:
-        """Return True with probability p (assuming a uniform generator),
-        shrinking towards False. If ``forced`` is set to a non-None value, this
-        will always return that value but will write choices appropriate to having
-        drawn that value randomly."""
-        # Note that this could also be implemented in terms of draw_integer().
-
         assert self._cd is not None
-        # NB this function is vastly more complicated than it may seem reasonable
-        # for it to be. This is because it is used in a lot of places and it's
-        # important for it to shrink well, so it's worth the engineering effort.
-
-        if p <= 0 or p >= 1:
-            bits = 1
-        else:
-            # When there is a meaningful draw, in order to shrink well we will
-            # set things up so that 0 and 1 always correspond to False and True
-            # respectively. This means we want enough bits available that in a
-            # draw we will always have at least one truthy value and one falsey
-            # value.
-            bits = math.ceil(-math.log(min(p, 1 - p), 2))
-        # In order to avoid stupidly large draws where the probability is
-        # effectively zero or one, we treat probabilities of under 2^-64 to be
-        # effectively zero.
-        if bits > 64:
-            # There isn't enough precision near one for this to occur for values
-            # far from 0.
-            p = 0.0
-            bits = 1
-
-        size = 2**bits
-
-        while True:
-            # The logic here is a bit complicated and special cased to make it
-            # play better with the shrinker.
-
-            # We imagine partitioning the real interval [0, 1] into 2**n equal parts
-            # and looking at each part and whether its interior is wholly <= p
-            # or wholly >= p. At most one part can be neither.
-
-            # We then pick a random part. If it's wholly on one side or the other
-            # of p then we use that as the answer. If p is contained in the
-            # interval then we start again with a new probability that is given
-            # by the fraction of that interval that was <= our previous p.
-
-            # We then take advantage of the fact that we have control of the
-            # labelling to make this shrink better, using the following tricks:
-
-            # If p is <= 0 or >= 1 the result of this coin is certain. We make sure
-            # to write a byte to the data stream anyway so that these don't cause
-            # difficulties when shrinking.
-            if p <= 0:
-                self._cd.draw_bits(1, forced=0)
-                result = False
-            elif p >= 1:
-                self._cd.draw_bits(1, forced=1)
-                result = True
-            else:
-                falsey = floor(size * (1 - p))
-                truthy = floor(size * p)
-                remainder = size * p - truthy
-
-                if falsey + truthy == size:
-                    partial = False
-                else:
-                    partial = True
-
-                i = self._cd.draw_bits(
-                    bits,
-                    forced=None if forced is None else int(forced),
-                    fake_forced=fake_forced,
-                )
-
-                # We always choose the region that causes us to repeat the loop as
-                # the maximum value, so that shrinking the drawn bits never causes
-                # us to need to draw more self._cd.
-                if partial and i == size - 1:
-                    p = remainder
-                    continue
-                if falsey == 0:
-                    # Every other partition is truthy, so the result is true
-                    result = True
-                elif truthy == 0:
-                    # Every other partition is falsey, so the result is false
-                    result = False
-                elif i <= 1:
-                    # We special case so that zero is always false and 1 is always
-                    # true which makes shrinking easier because we can always
-                    # replace a truthy block with 1. This has the slightly weird
-                    # property that shrinking from 2 to 1 can cause the result to
-                    # grow, but the shrinker always tries 0 and 1 first anyway, so
-                    # this will usually be fine.
-                    result = bool(i)
-                else:
-                    # Originally everything in the region 0 <= i < falsey was false
-                    # and everything above was true. We swapped one truthy element
-                    # into this region, so the region becomes 0 <= i <= falsey
-                    # except for i = 1. We know i > 1 here, so the test for truth
-                    # becomes i > falsey.
-                    result = i > falsey
-
-            break
-        return result
+        assert self._cd._random is not None
+        return self._cd._random.random() < p
 
     def draw_integer(
         self,
@@ -1063,18 +939,15 @@ class HypothesisProvider(PrimitiveProvider):
         *,
         weights: Optional[dict[int, float]] = None,
         shrink_towards: int = 0,
-        forced: Optional[int] = None,
-        fake_forced: bool = False,
     ) -> int:
         assert self._cd is not None
 
+        center = 0
         if min_value is not None:
-            shrink_towards = max(min_value, shrink_towards)
+            center = max(min_value, center)
         if max_value is not None:
-            shrink_towards = min(max_value, shrink_towards)
+            center = min(max_value, center)
 
-        # This is easy to build on top of our existing conjecture utils,
-        # and it's easy to build sampled_from and weighted_coin on this.
         if weights is not None:
             assert min_value is not None
             assert max_value is not None
@@ -1092,49 +965,31 @@ class HypothesisProvider(PrimitiveProvider):
             )
             # if we're forcing, it's easiest to force into the unmapped probability
             # mass and then force the drawn value after.
-            idx = sampler.sample(
-                self._cd, forced=None if forced is None else 0, fake_forced=fake_forced
-            )
+            idx = sampler.sample(self._cd)
 
-            return self._draw_bounded_integer(
-                min_value,
-                max_value,
-                # implicit reliance on dicts being sorted for determinism
-                forced=forced if idx == 0 else list(weights)[idx - 1],
-                center=shrink_towards,
-                fake_forced=fake_forced,
-            )
+            if idx == 0:
+                return self._draw_bounded_integer(min_value, max_value)
+            # implicit reliance on dicts being sorted for determinism
+            return list(weights)[idx - 1]
 
         if min_value is None and max_value is None:
-            return self._draw_unbounded_integer(forced=forced, fake_forced=fake_forced)
+            return self._draw_unbounded_integer()
 
         if min_value is None:
-            assert max_value is not None  # make mypy happy
+            assert max_value is not None
             probe = max_value + 1
             while max_value < probe:
-                probe = shrink_towards + self._draw_unbounded_integer(
-                    forced=None if forced is None else forced - shrink_towards,
-                    fake_forced=fake_forced,
-                )
+                probe = center + self._draw_unbounded_integer()
             return probe
 
         if max_value is None:
             assert min_value is not None
             probe = min_value - 1
             while probe < min_value:
-                probe = shrink_towards + self._draw_unbounded_integer(
-                    forced=None if forced is None else forced - shrink_towards,
-                    fake_forced=fake_forced,
-                )
+                probe = center + self._draw_unbounded_integer()
             return probe
 
-        return self._draw_bounded_integer(
-            min_value,
-            max_value,
-            center=shrink_towards,
-            forced=forced,
-            fake_forced=fake_forced,
-        )
+        return self._draw_bounded_integer(min_value, max_value)
 
     def draw_float(
         self,
@@ -1147,12 +1002,9 @@ class HypothesisProvider(PrimitiveProvider):
         # future.
         # width: Literal[16, 32, 64] = 64,
         # exclude_min and exclude_max handled higher up,
-        forced: Optional[float] = None,
-        fake_forced: bool = False,
     ) -> float:
         (
             sampler,
-            forced_sign_bit,
             clamper,
             nasty_floats,
         ) = self._draw_float_init_logic(
@@ -1165,29 +1017,14 @@ class HypothesisProvider(PrimitiveProvider):
         assert self._cd is not None
 
         while True:
-            # If `forced in nasty_floats`, then `forced` was *probably*
-            # generated by drawing a nonzero index from the sampler. However, we
-            # have no obligation to generate it that way when forcing. In particular,
-            # i == 0 is able to produce all possible floats, and the forcing
-            # logic is simpler if we assume this choice.
-            forced_i = None if forced is None else 0
-            i = (
-                sampler.sample(self._cd, forced=forced_i, fake_forced=fake_forced)
-                if sampler
-                else 0
-            )
+            i = sampler.sample(self._cd) if sampler else 0
             if i == 0:
-                result = self._draw_float(
-                    forced_sign_bit=forced_sign_bit,
-                    forced=forced,
-                    fake_forced=fake_forced,
-                )
+                result = self._draw_float()
                 if allow_nan and math.isnan(result):
                     clamped = result
                 else:
                     clamped = clamper(result)
                 if clamped != result and not (math.isnan(result) and allow_nan):
-                    self._draw_float(forced=clamped, fake_forced=fake_forced)
                     result = clamped
             else:
                 result = nasty_floats[i - 1]
@@ -1213,8 +1050,6 @@ class HypothesisProvider(PrimitiveProvider):
                 if math.isnan(result):
                     result = int_to_float(float_to_int(result))
 
-                self._draw_float(forced=result, fake_forced=fake_forced)
-
             return result
 
     def draw_string(
@@ -1223,10 +1058,9 @@ class HypothesisProvider(PrimitiveProvider):
         *,
         min_size: int = 0,
         max_size: int = COLLECTION_DEFAULT_MAX_SIZE,
-        forced: Optional[str] = None,
-        fake_forced: bool = False,
     ) -> str:
         assert self._cd is not None
+        assert self._cd._random is not None
 
         average_size = min(
             max(min_size * 2, min_size + 5),
@@ -1239,36 +1073,16 @@ class HypothesisProvider(PrimitiveProvider):
             min_size=min_size,
             max_size=max_size,
             average_size=average_size,
-            forced=None if forced is None else len(forced),
-            fake_forced=fake_forced,
             observe=False,
         )
         while elements.more():
-            forced_i: Optional[int] = None
-            if forced is not None:
-                c = forced[elements.count - 1]
-                forced_i = intervals.index_from_char_in_shrink_order(c)
-
             if len(intervals) > 256:
-                if self.draw_boolean(
-                    0.2,
-                    forced=None if forced_i is None else forced_i > 255,
-                    fake_forced=fake_forced,
-                ):
-                    i = self._draw_bounded_integer(
-                        256,
-                        len(intervals) - 1,
-                        forced=forced_i,
-                        fake_forced=fake_forced,
-                    )
+                if self.draw_boolean(0.2):
+                    i = self._cd._random.randint(256, len(intervals) - 1)
                 else:
-                    i = self._draw_bounded_integer(
-                        0, 255, forced=forced_i, fake_forced=fake_forced
-                    )
+                    i = self._cd._random.randint(0, 255)
             else:
-                i = self._draw_bounded_integer(
-                    0, len(intervals) - 1, forced=forced_i, fake_forced=fake_forced
-                )
+                i = self._cd._random.randint(0, len(intervals) - 1)
 
             chars.append(intervals.char_in_shrink_order(i))
 
@@ -1278,11 +1092,9 @@ class HypothesisProvider(PrimitiveProvider):
         self,
         min_size: int = 0,
         max_size: int = COLLECTION_DEFAULT_MAX_SIZE,
-        *,
-        forced: Optional[bytes] = None,
-        fake_forced: bool = False,
     ) -> bytes:
         assert self._cd is not None
+        assert self._cd._random is not None
 
         buf = bytearray()
         average_size = min(
@@ -1294,81 +1106,28 @@ class HypothesisProvider(PrimitiveProvider):
             min_size=min_size,
             max_size=max_size,
             average_size=average_size,
-            forced=None if forced is None else len(forced),
-            fake_forced=fake_forced,
             observe=False,
         )
         while elements.more():
-            forced_i: Optional[int] = None
-            if forced is not None:
-                # implicit conversion from bytes to int by indexing here
-                forced_i = forced[elements.count - 1]
-
-            buf += self._cd.draw_bits(
-                8, forced=forced_i, fake_forced=fake_forced
-            ).to_bytes(1, "big")
+            buf += self._cd._random.randbytes(1)
 
         return bytes(buf)
 
-    def _draw_float(
-        self,
-        forced_sign_bit: Optional[int] = None,
-        *,
-        forced: Optional[float] = None,
-        fake_forced: bool = False,
-    ) -> float:
-        """
-        Helper for draw_float which draws a random 64-bit float.
-        """
+    def _draw_float(self) -> float:
         assert self._cd is not None
+        assert self._cd._random is not None
 
-        if forced is not None:
-            # sign_aware_lte(forced, -0.0) does not correctly handle the
-            # math.nan case here.
-            forced_sign_bit = math.copysign(1, forced) == -1
-        is_negative = self._cd.draw_bits(
-            1, forced=forced_sign_bit, fake_forced=fake_forced
-        )
-        f = lex_to_float(
-            self._cd.draw_bits(
-                64,
-                forced=None if forced is None else float_to_lex(abs(forced)),
-                fake_forced=fake_forced,
-            )
-        )
-        return -f if is_negative else f
+        f = lex_to_float(self._cd._random.getrandbits(64))
+        sign = self._cd._random.getrandbits(1) == 1
+        return sign * f
 
-    def _draw_unbounded_integer(
-        self, *, forced: Optional[int] = None, fake_forced: bool = False
-    ) -> int:
+    def _draw_unbounded_integer(self) -> int:
         assert self._cd is not None
-        forced_i = None
-        if forced is not None:
-            # Using any bucket large enough to contain this integer would be a
-            # valid way to force it. This is because an n bit integer could have
-            # been drawn from a bucket of size n, or from any bucket of size
-            # m > n.
-            # We'll always choose the smallest eligible bucket here.
+        assert self._cd._random is not None
 
-            # We need an extra bit to handle forced signed integers. INT_SIZES
-            # is interpreted as unsigned sizes.
-            bit_size = forced.bit_length() + 1
-            size = min(size for size in INT_SIZES if bit_size <= size)
-            forced_i = INT_SIZES.index(size)
+        size = INT_SIZES[INT_SIZES_SAMPLER.sample(self._cd)]
 
-        size = INT_SIZES[
-            INT_SIZES_SAMPLER.sample(self._cd, forced=forced_i, fake_forced=fake_forced)
-        ]
-
-        forced_r = None
-        if forced is not None:
-            forced_r = forced
-            forced_r <<= 1
-            if forced < 0:
-                forced_r = -forced_r
-                forced_r |= 1
-
-        r = self._cd.draw_bits(size, forced=forced_r, fake_forced=fake_forced)
+        r = self._cd._random.getrandbits(size)
         sign = r & 1
         r >>= 1
         if sign:
@@ -1380,80 +1139,35 @@ class HypothesisProvider(PrimitiveProvider):
         lower: int,
         upper: int,
         *,
-        center: Optional[int] = None,
-        forced: Optional[int] = None,
-        fake_forced: bool = False,
-        _vary_effective_size: bool = True,
+        vary_size: bool = True,
     ) -> int:
         assert lower <= upper
-        assert forced is None or lower <= forced <= upper
         assert self._cd is not None
+        assert self._cd._random is not None
+
         if lower == upper:
-            # Write a value even when this is trivial so that when a bound depends
-            # on other values we don't suddenly disappear when the gap shrinks to
-            # zero - if that happens then often the data stream becomes misaligned
-            # and we fail to shrink in cases where we really should be able to.
-            self._cd.draw_bits(1, forced=0)
-            return int(lower)
+            return lower
 
-        if center is None:
-            center = lower
-        center = min(max(center, lower), upper)
-
-        if center == upper:
-            above = False
-        elif center == lower:
-            above = True
-        else:
-            force_above = None if forced is None else forced < center
-            above = not self._cd.draw_bits(
-                1, forced=force_above, fake_forced=fake_forced
-            )
-
-        if above:
-            gap = upper - center
-        else:
-            gap = center - lower
-
-        assert gap > 0
-
-        bits = gap.bit_length()
-        probe = gap + 1
-
-        if (
-            bits > 24
-            and _vary_effective_size
-            and self.draw_boolean(
-                7 / 8, forced=None if forced is None else False, fake_forced=fake_forced
-            )
-        ):
-            # For large ranges, we combine the uniform random distribution from draw_bits
+        bits = (upper - lower).bit_length()
+        if bits > 24 and vary_size and self._cd._random.random() < 7 / 8:
+            # For large ranges, we combine the uniform random distribution
             # with a weighting scheme with moderate chance.  Cutoff at 2 ** 24 so that our
             # choice of unicode characters is uniform but the 32bit distribution is not.
             idx = INT_SIZES_SAMPLER.sample(self._cd)
-            force_bits = min(bits, INT_SIZES[idx])
-            forced = self._draw_bounded_integer(
-                lower=center if above else max(lower, center - 2**force_bits - 1),
-                upper=center if not above else min(upper, center + 2**force_bits - 1),
-                _vary_effective_size=False,
+            cap_bits = min(bits, INT_SIZES[idx])
+            result = self._draw_bounded_integer(
+                lower=lower,
+                upper=min(upper, lower + 2**cap_bits - 1),
+                vary_size=False,
             )
+            assert lower <= result <= upper
+            return result
 
-            assert lower <= forced <= upper
-
-        while probe > gap:
-            probe = self._cd.draw_bits(
-                bits,
-                forced=None if forced is None else abs(forced - center),
-                fake_forced=fake_forced,
-            )
-
-        if above:
-            result = center + probe
-        else:
-            result = center - probe
+        result = upper + 1
+        while result > upper:
+            result = lower + self._cd._random.getrandbits(bits)
 
         assert lower <= result <= upper
-        assert forced is None or result == forced, (result, forced, center, above)
         return result
 
     @classmethod
@@ -1466,7 +1180,6 @@ class HypothesisProvider(PrimitiveProvider):
         smallest_nonzero_magnitude: float,
     ) -> tuple[
         Optional[Sampler],
-        Optional[Literal[0, 1]],
         Callable[[float], float],
         list[float],
     ]:
@@ -1503,7 +1216,6 @@ class HypothesisProvider(PrimitiveProvider):
         smallest_nonzero_magnitude: float,
     ) -> tuple[
         Optional[Sampler],
-        Optional[Literal[0, 1]],
         Callable[[float], float],
         list[float],
     ]:
@@ -1536,17 +1248,13 @@ class HypothesisProvider(PrimitiveProvider):
         weights = [0.2 * len(nasty_floats)] + [0.8] * len(nasty_floats)
         sampler = Sampler(weights, observe=False) if nasty_floats else None
 
-        forced_sign_bit: Optional[Literal[0, 1]] = None
-        if sign_aware_lte(min_value, -0.0) != sign_aware_lte(0.0, max_value):
-            forced_sign_bit = 1 if sign_aware_lte(min_value, -0.0) else 0
-
         clamper = make_float_clamper(
             min_value,
             max_value,
             smallest_nonzero_magnitude=smallest_nonzero_magnitude,
             allow_nan=allow_nan,
         )
-        return (sampler, forced_sign_bit, clamper, nasty_floats)
+        return (sampler, clamper, nasty_floats)
 
 
 # The set of available `PrimitiveProvider`s, by name.  Other libraries, such as
@@ -1563,18 +1271,6 @@ AVAILABLE_PROVIDERS = {
 
 class ConjectureData:
     @classmethod
-    def for_buffer(
-        cls,
-        buffer: Union[list[int], bytes],
-        *,
-        observer: Optional[DataObserver] = None,
-        provider: Union[type, PrimitiveProvider] = HypothesisProvider,
-    ) -> "ConjectureData":
-        return cls(
-            len(buffer), buffer, random=None, observer=observer, provider=provider
-        )
-
-    @classmethod
     def for_choices(
         cls,
         choices: Sequence[Union[NodeTemplate, ChoiceT]],
@@ -1584,12 +1280,9 @@ class ConjectureData:
         max_length: Optional[int] = None,
         random: Optional[Random] = None,
     ) -> "ConjectureData":
-        from hypothesis.internal.conjecture.engine import BUFFER_SIZE
 
         return cls(
-            max_length=BUFFER_SIZE,
-            max_length_ir=(ir_size(choices) if max_length is None else max_length),
-            prefix=b"",
+            max_length=ir_size(choices) if max_length is None else max_length,
             random=random,
             ir_prefix=choices,
             observer=observer,
@@ -1599,7 +1292,6 @@ class ConjectureData:
     def __init__(
         self,
         max_length: int,
-        prefix: Union[list[int], bytes, bytearray],
         *,
         random: Optional[Random],
         observer: Optional[DataObserver] = None,
@@ -1608,8 +1300,6 @@ class ConjectureData:
         max_length_ir: Optional[int] = None,
         provider_kw: Optional[dict[str, Any]] = None,
     ) -> None:
-        from hypothesis.internal.conjecture.engine import BUFFER_SIZE_IR
-
         if observer is None:
             observer = DataObserver()
         if provider_kw is None:
@@ -1623,14 +1313,18 @@ class ConjectureData:
         assert isinstance(observer, DataObserver)
         self._bytes_drawn = 0
         self.observer = observer
-        self.max_length = max_length
-        self.max_length_ir = BUFFER_SIZE_IR if max_length_ir is None else max_length_ir
+        self.max_length_ir = max_length
         self.is_find = False
         self.overdraw = 0
-        self.__prefix = bytes(prefix)
-        self.__random = random
+        self._random = random
 
-        self.buffer: "Union[bytes, bytearray]" = bytearray()
+        if ir_prefix is not None:
+            assert random is not None or max_length <= ir_size(ir_prefix)
+            assert not any(
+                isinstance(v, IRNode) for v in ir_prefix
+            ), ir_prefix  # TODO_IR remove
+        assert max_length is not None  # TODO_IR remove
+
         self.index = 0
         self.length_ir = 0
         self.index_ir = 0
@@ -1694,9 +1388,9 @@ class ConjectureData:
         self.start_example(TOP_LABEL)
 
     def __repr__(self) -> str:
-        return "ConjectureData(%s, %d bytes%s)" % (
+        return "ConjectureData(%s, %d nodes%s)" % (
             self.status.name,
-            len(self.buffer),
+            len(self.ir_nodes),
             ", frozen" if self.frozen else "",
         )
 
@@ -1732,32 +1426,22 @@ class ConjectureData:
     def _draw(self, ir_type, kwargs, *, observe, forced, fake_forced):
         # this is somewhat redundant with the length > max_length check at the
         # end of the function, but avoids trying to use a null self.random when
-        # drawing past the node of a ConjectureData.for_choices data.
+        # drawing past the node of a ConjectureData.for_ir data.
         if self.length_ir == self.max_length_ir:
             debug_report(f"overrun because hit {self.max_length_ir=}")
             self.mark_overrun()
 
-        if self.ir_prefix is not None and observe:
-            if self.index_ir < len(self.ir_prefix):
-                choice = self._pop_choice(ir_type, kwargs, forced=forced)
-            else:
-                try:
-                    choice = (
-                        forced
-                        if forced is not None
-                        else draw_choice(ir_type, kwargs, random=self.__random)
-                    )
-                except StopTest:
-                    debug_report("overrun because draw_choice overran")
-                    self.mark_overrun()
+        if (
+            observe
+            and self.ir_prefix is not None
+            and self.index_ir < len(self.ir_prefix)
+        ):
+            value = self._pop_choice(ir_type, kwargs, forced=forced)
+        elif forced is None:
+            value = getattr(self.provider, f"draw_{ir_type}")(**kwargs)
 
-            if forced is None:
-                forced = choice
-                fake_forced = True
-
-        value = getattr(self.provider, f"draw_{ir_type}")(
-            **kwargs, forced=forced, fake_forced=fake_forced
-        )
+        if forced is not None:
+            value = forced
 
         if observe:
             was_forced = forced is not None and not fake_forced
@@ -1767,7 +1451,8 @@ class ConjectureData:
             size = ir_size([value])
             if self.length_ir + size > self.max_length_ir:
                 debug_report(
-                    f"overrun because {self.length_ir=} + {size=} > {self.max_length_ir=}"
+                    f"overrun because {self.length_ir=} + {size=} > "
+                    f"{self.max_length_ir=} (at {value=})"
                 )
                 self.mark_overrun()
 
@@ -2047,7 +1732,6 @@ class ConjectureData:
             self.__result = ConjectureResult(
                 status=self.status,
                 interesting_origin=self.interesting_origin,
-                buffer=self.buffer,
                 examples=self.examples,
                 ir_nodes=self.ir_nodes,
                 output=self.output,
@@ -2208,11 +1892,9 @@ class ConjectureData:
 
     def freeze(self) -> None:
         if self.frozen:
-            assert isinstance(self.buffer, bytes)
             return
         self.finish_time = time.perf_counter()
         self.gc_finish_time = gc_cumulative_time()
-        assert len(self.buffer) == self.index
 
         # Always finish by closing all remaining examples so that we have a
         # valid tree.
@@ -2221,7 +1903,6 @@ class ConjectureData:
 
         self.__example_record.freeze()
         self.frozen = True
-        self.buffer = bytes(self.buffer)
         self.observer.conclude_test(self.status, self.interesting_origin)
 
     def choice(
@@ -2241,53 +1922,6 @@ class ConjectureData:
             observe=observe,
         )
         return values[i]
-
-    def draw_bits(
-        self, n: int, *, forced: Optional[int] = None, fake_forced: bool = False
-    ) -> int:
-        """Return an ``n``-bit integer from the underlying source of
-        bytes. If ``forced`` is set to an integer will instead
-        ignore the underlying source and simulate a draw as if it had
-        returned that integer."""
-        self.__assert_not_frozen("draw_bits")
-        if n == 0:
-            return 0
-        assert n > 0
-        n_bytes = bits_to_bytes(n)
-        self.__check_capacity(n_bytes)
-
-        if forced is not None:
-            buf = int_to_bytes(forced, n_bytes)
-        elif self._bytes_drawn < len(self.__prefix):
-            index = self._bytes_drawn
-            buf = self.__prefix[index : index + n_bytes]
-            if len(buf) < n_bytes:
-                assert self.__random is not None
-                buf += uniform(self.__random, n_bytes - len(buf))
-        else:
-            assert self.__random is not None
-            buf = uniform(self.__random, n_bytes)
-        buf = bytearray(buf)
-        self._bytes_drawn += n_bytes
-
-        assert len(buf) == n_bytes
-
-        # If we have a number of bits that is not a multiple of 8
-        # we have to mask off the high bits.
-        buf[0] &= BYTE_MASKS[n % 8]
-        buf = bytes(buf)
-        result = int_from_bytes(buf)
-
-        assert isinstance(self.buffer, bytearray)
-        self.buffer.extend(buf)
-        self.index = len(self.buffer)
-
-        assert result.bit_length() <= n
-        return result
-
-    def __check_capacity(self, n: int) -> None:
-        if self.index + n > self.max_length:
-            self.mark_overrun()
 
     def conclude_test(
         self,
@@ -2326,9 +1960,7 @@ def draw_choice(ir_type, kwargs, *, random):
     from hypothesis.internal.conjecture.engine import BUFFER_SIZE
 
     cd = ConjectureData(
-        max_length=BUFFER_SIZE,
-        # buffer doesn't matter if forced is passed since we're forcing the sole draw
-        prefix=b"",
+        BUFFER_SIZE,
         random=random,
     )
     return getattr(cd.provider, f"draw_{ir_type}")(**kwargs)
