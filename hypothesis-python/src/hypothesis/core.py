@@ -87,6 +87,7 @@ from hypothesis.internal.conjecture.junkdrawer import (
     ensure_free_stackframes,
     gc_cumulative_time,
 )
+from hypothesis.internal.conjecture.providers import BytestringProvider
 from hypothesis.internal.conjecture.shrinker import sort_key_ir
 from hypothesis.internal.entropy import deterministic_PRNG
 from hypothesis.internal.escalation import (
@@ -488,7 +489,7 @@ def execute_explicit_examples(state, wrapped_test, arguments, kwargs, original_s
 
         with local_settings(state.settings):
             fragments_reported = []
-            empty_data = ConjectureData.for_buffer(b"")
+            empty_data = ConjectureData.for_choices([])
             try:
                 execute_example = partial(
                     state.execute_once,
@@ -1333,9 +1334,7 @@ class StateForActualGivenExecution:
             info = falsifying_example.extra_information
             fragments = []
 
-            ran_example = runner.new_conjecture_data_for_buffer(
-                falsifying_example.buffer
-            )
+            ran_example = runner.new_conjecture_data_ir(falsifying_example.choices)
             ran_example.slice_comments = falsifying_example.slice_comments
             tb = None
             origin = None
@@ -1866,7 +1865,13 @@ def given(
                 if isinstance(buffer, io.IOBase):
                     buffer = buffer.read(BUFFER_SIZE)
                 assert isinstance(buffer, (bytes, bytearray, memoryview))
-                data = ConjectureData.for_buffer(buffer)
+                data = ConjectureData(
+                    max_length=BUFFER_SIZE,
+                    prefix=b"",
+                    random=None,
+                    provider=BytestringProvider,
+                    provider_kw={"bytestring": buffer},
+                )
                 try:
                     state.execute_once(data)
                 except (StopTest, UnsatisfiedAssumption):
@@ -1880,7 +1885,8 @@ def given(
                         settings.database.save(database_key, ir_to_bytes(data.choices))
                         minimal_failures[data.interesting_origin] = data.ir_nodes
                     raise
-                return bytes(data.buffer)
+                assert isinstance(data.provider, BytestringProvider)
+                return bytes(data.provider.drawn)
 
             fuzz_one_input.__doc__ = HypothesisHandle.fuzz_one_input.__doc__
             return fuzz_one_input

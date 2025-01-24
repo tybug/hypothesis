@@ -1606,11 +1606,20 @@ class ConjectureData:
         provider: Union[type, PrimitiveProvider] = HypothesisProvider,
         ir_prefix: Optional[Sequence[Union[NodeTemplate, ChoiceT]]] = None,
         max_length_ir: Optional[int] = None,
+        provider_kw: Optional[dict[str, Any]] = None,
     ) -> None:
         from hypothesis.internal.conjecture.engine import BUFFER_SIZE_IR
 
         if observer is None:
             observer = DataObserver()
+        if provider_kw is None:
+            provider_kw = {}
+        elif not isinstance(provider, type):
+            raise InvalidArgument(
+                f"Expected {provider=} to be a class since {provider_kw=} was "
+                "passed, but got an instance instead."
+            )
+
         assert isinstance(observer, DataObserver)
         self._bytes_drawn = 0
         self.observer = observer
@@ -1620,9 +1629,6 @@ class ConjectureData:
         self.overdraw = 0
         self.__prefix = bytes(prefix)
         self.__random = random
-
-        if ir_prefix is None:
-            assert random is not None or max_length <= len(prefix)
 
         self.buffer: "Union[bytes, bytearray]" = bytearray()
         self.index = 0
@@ -1644,9 +1650,11 @@ class ConjectureData:
         self.has_discards = False
 
         self.provider: PrimitiveProvider = (
-            provider(self) if isinstance(provider, type) else provider
+            provider(self, **provider_kw) if isinstance(provider, type) else provider
         )
         assert isinstance(self.provider, PrimitiveProvider)
+        if ir_prefix is None and isinstance(self.provider, HypothesisProvider):
+            assert random is not None or max_length <= len(prefix)
 
         self.__result: "Optional[ConjectureResult]" = None
 
@@ -1729,19 +1737,12 @@ class ConjectureData:
             debug_report(f"overrun because hit {self.max_length_ir=}")
             self.mark_overrun()
 
-        if self.ir_prefix is not None and observe:
-            if self.index_ir < len(self.ir_prefix):
-                choice = self._pop_choice(ir_type, kwargs, forced=forced)
-            else:
-                try:
-                    choice = (
-                        forced
-                        if forced is not None
-                        else draw_choice(ir_type, kwargs, random=self.__random)
-                    )
-                except StopTest:
-                    debug_report("overrun because draw_choice overran")
-                    self.mark_overrun()
+        if (
+            observe
+            and self.ir_prefix is not None
+            and self.index_ir < len(self.ir_prefix)
+        ):
+            choice = self._pop_choice(ir_type, kwargs, forced=forced)
 
             if forced is None:
                 forced = choice
@@ -1756,7 +1757,7 @@ class ConjectureData:
             getattr(self.observer, f"draw_{ir_type}")(
                 value, kwargs=kwargs, was_forced=was_forced
             )
-            size = ir_size([value])
+            size = 0 if self.provider.avoid_realization else ir_size([value])
             if self.length_ir + size > self.max_length_ir:
                 debug_report(
                     f"overrun because {self.length_ir=} + {size=} > {self.max_length_ir=}"
@@ -1963,14 +1964,18 @@ class ConjectureData:
             # node if the alternative is not "the entire data is an overrun".
             assert self.index_ir == len(self.ir_prefix) - 1
             if node.type == "simplest":
-                try:
-                    choice: ChoiceT = choice_from_index(0, ir_type, kwargs)
-                except ChoiceTooLarge:
-                    self.mark_overrun()
+                if isinstance(self.provider, HypothesisProvider):
+                    try:
+                        choice: ChoiceT = choice_from_index(0, ir_type, kwargs)
+                    except ChoiceTooLarge:
+                        self.mark_overrun()
+                else:
+                    # give alternative backends control over these draws
+                    choice = getattr(self.provider, f"draw_{ir_type}")(**kwargs)
             else:
                 raise NotImplementedError
 
-            node.size -= ir_size([choice])
+            node.size -= 0 if self.provider.avoid_realization else ir_size([choice])
             if node.size < 0:
                 self.mark_overrun()
             return choice
@@ -2253,7 +2258,7 @@ class ConjectureData:
         elif self._bytes_drawn < len(self.__prefix):
             index = self._bytes_drawn
             buf = self.__prefix[index : index + n_bytes]
-            if len(buf) < n_bytes:
+            if len(buf) < n_bytes:  # pragma: no cover # removing soon
                 assert self.__random is not None
                 buf += uniform(self.__random, n_bytes - len(buf))
         else:
