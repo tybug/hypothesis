@@ -134,11 +134,11 @@ outcome - for example, was ``x`` a binary tree?  what was the difference between
 expected and the actual value?  how many queries did it take to find a solution? -
 Hypothesis makes this easy.
 
-:func:`~hypothesis.event` accepts a string label, and optionally a string or int or
+|event| accepts a string label, and optionally a string or int or
 float observation associated with it.  All events are collected and summarized in
 :ref:`statistics`, as well as included on a per-test-case basis in our observations.
 
-:func:`~hypothesis.target` is a special case of numeric-valued events: as well as
+|target| is a special case of numeric-valued events: as well as
 recording them in observations, Hypothesis will try to maximize the targeted value.
 Knowing that, you can use this to guide the search for failing inputs.
 

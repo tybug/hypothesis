@@ -126,9 +126,6 @@ Limitations
 
 Hypothesis does not inspect :pep:`484` type comments at runtime. While |st.from_type| will work as usual, inference in |st.builds| and |@given| will only work if you manually create the ``__annotations__`` attribute (e.g. by using ``@annotations(...)`` and ``@returns(...)`` decorators).
 
-The :mod:`python:typing` module changes between different Python releases, including at minor versions.  These are all supported on a best-effort basis, but you may encounter problems.  Please report them to us, and consider updating to a newer version of Python as a workaround.
-
-
 .. _providing-explicit-examples:
 
 |@example|
@@ -633,13 +630,13 @@ Using it is quite straightforward: All you need to do is subclass
 :class:`hypothesis.extra.django.TransactionTestCase` or
 :class:`~hypothesis.extra.django.LiveServerTestCase` or
 :class:`~hypothesis.extra.django.StaticLiveServerTestCase`
-and you can use :func:`@given <hypothesis.given>` as normal,
+and you can use |@given| as normal,
 and the transactions will be per example
-rather than per test function as they would be if you used :func:`@given <hypothesis.given>` with a normal
+rather than per test function as they would be if you used |@given| with a normal
 django test suite (this is important because your test function will be called
 multiple times and you don't want them to interfere with each other). Test cases
 on these classes that do not use
-:func:`@given <hypothesis.given>` will be run as normal for :class:`django:django.test.TestCase` or :class:`django:django.test.TransactionTestCase`.
+|@given| will be run as normal for :class:`django:django.test.TestCase` or :class:`django:django.test.TransactionTestCase`.
 
 .. autoclass:: hypothesis.extra.django.TransactionTestCase
 .. autoclass:: hypothesis.extra.django.LiveServerTestCase
@@ -653,7 +650,7 @@ If you are using :class:`~hypothesis.extra.django.TransactionTestCase`,
 you may need to use ``@settings(suppress_health_check=[HealthCheck.too_slow])``
 to avoid :ref:`errors due to slow example generation <healthchecks>`.
 
-Having set up a test class, you can now pass :func:`@given <hypothesis.given>`
+Having set up a test class, you can now pass |@given|
 a strategy for Django models with |django.from_model|.
 For example, using :gh-file:`the trivial django project we have for testing
 <hypothesis-python/tests/django/toystore/models.py>`:
@@ -878,7 +875,7 @@ The way this works is by introducing the concept of an executor. An executor is 
     def default_executor(function):
         return function()
 
-You define executors by defining a method ``execute_example`` on a class. Any test methods on that class with :func:`@given <hypothesis.given>` used on them will use ``self.execute_example`` as an executor with which to run tests. For example, the following executor runs all its code twice:
+You define executors by defining a method ``execute_example`` on a class. Any test methods on that class with |@given| used on them will use ``self.execute_example`` as an executor with which to run tests. For example, the following executor runs all its code twice:
 
 .. code:: python
 
@@ -918,7 +915,7 @@ and should be rewritten as:
                 result = result()
             return result
 
-An alternative hook is provided for use by test runner extensions such as :pypi:`pytest-trio`, which cannot use the ``execute_example`` method. This is **not** recommended for end-users - it is better to write a complete test function directly, perhaps by using a decorator to perform the same transformation before applying :func:`@given <hypothesis.given>`.
+An alternative hook is provided for use by test runner extensions such as :pypi:`pytest-trio`, which cannot use the ``execute_example`` method. This is **not** recommended for end-users - it is better to write a complete test function directly, perhaps by using a decorator to perform the same transformation before applying |@given|.
 
 .. code:: python
 

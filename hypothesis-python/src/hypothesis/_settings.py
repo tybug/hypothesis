@@ -187,11 +187,11 @@ class HealthCheck(Enum, metaclass=HealthCheckMeta):
     """Checks if the natural example to shrink towards is very large."""
 
     not_a_test_method = 8
-    """Deprecated; we always error if :func:`@given <hypothesis.given>` is applied
+    """Deprecated; we always error if |@given| is applied
     to a method defined by :class:`python:unittest.TestCase` (i.e. not a test)."""
 
     function_scoped_fixture = 9
-    """Checks if :func:`@given <hypothesis.given>` has been applied to a test
+    """Checks if |@given| has been applied to a test
     with a pytest function-scoped fixture. Function-scoped fixtures run once
     for the whole function, not once per example, and this is usually not what
     you want.
@@ -205,11 +205,11 @@ class HealthCheck(Enum, metaclass=HealthCheckMeta):
     examples, but for some reason you cannot use a wider fixture scope
     (e.g. session scope, module scope, class scope).
 
-    This check requires the :ref:`Hypothesis pytest plugin<pytest-plugin>`,
+    This check requires the :ref:`Hypothesis pytest plugin <pytest-plugin>`,
     which is enabled by default when running Hypothesis inside pytest."""
 
     differing_executors = 10
-    """Checks if :func:`@given <hypothesis.given>` has been applied to a test
+    """Checks if |@given| has been applied to a test
     which is executed by different :ref:`executors<custom-function-execution>`.
     If your test function is defined as a method on a class, that class will be
     your executor, and subclasses executing an inherited test is a common way
@@ -217,24 +217,22 @@ class HealthCheck(Enum, metaclass=HealthCheckMeta):
 
     The correct fix is often to bring the executor instance under the control
     of hypothesis by explicit parametrization over, or sampling from,
-    subclasses, or to refactor so that :func:`@given <hypothesis.given>` is
+    subclasses, or to refactor so that |@given| is
     specified on leaf subclasses."""
 
     nested_given = 11
-    """Checks if :func:`@given <hypothesis.given>` is used inside another
-    :func:`@given <hypothesis.given>`. This results in quadratic generation and
+    """Checks if |@given|is used inside another |@given|. This results in
+    quadratic generation and
     shrinking behavior, and can usually be expressed more cleanly by using
-    :func:`~hypothesis.strategies.data` to replace the inner
-    :func:`@given <hypothesis.given>`.
+    :func:`~hypothesis.strategies.data` to replace the inner |@given|.
 
     Nesting @given can be appropriate if you set appropriate limits for the
     quadratic behavior and cannot easily reexpress the inner function with
     :func:`~hypothesis.strategies.data`. To suppress this health check, set
     ``suppress_health_check=[HealthCheck.nested_given]`` on the outer
-    :func:`@given <hypothesis.given>`. Setting it on the inner
-    :func:`@given <hypothesis.given>` has no effect. If you have more than one
-    level of nesting, add a suppression for this health check to every
-    :func:`@given <hypothesis.given>` except the innermost one.
+    |@given|. Setting it on the inner |@given| has no effect. If you have more
+    than one level of nesting, add a suppression for this health check to every
+    |@given| except the innermost one.
     """
 
 
@@ -833,7 +831,7 @@ class settings(metaclass=settingsMeta):
         examples and uses a different database to store failures.
 
         The arguments to this method are exactly as for
-        :class:`~hypothesis.settings`: optional ``parent`` settings, and
+        |@settings|: optional ``parent`` settings, and
         keyword arguments for each setting that will be set differently to
         parent (or settings.default, if parent is None).
 

@@ -93,26 +93,25 @@ Technical API reference.
 .. rst-class:: clearfix row
 
 .. toctree::
-  :maxdepth: 1
-  :hidden:
+    :maxdepth: 1
+    :hidden:
 
-  quickstart
-  tutorial/index
-  how-to/index
-  explanation/index
-  reference/index
-  stateful
-  Extras <extras>
-  changelog
+    quickstart
+    tutorial/index
+    how-to/index
+    explanation/index
+    reference/index
+    Extras <extras>
+    changelog
 
 .. toctree::
-  :maxdepth: 1
-  :hidden:
-  :caption: About Hypothesis
+    :maxdepth: 1
+    :hidden:
+    :caption: About Hypothesis
 
-  development
-  compatibility
-  usage
-  extensions
-  packaging
-  community
+    development
+    compatibility
+    usage
+    extensions
+    packaging
+    community

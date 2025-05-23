@@ -47,8 +47,7 @@ Or some other custom integration, such as a :ref:`"hypothesis" entry point <entr
 * :pypi:`pandera` schemas all have a ``.strategy()`` method, which returns a strategy for
   matching :class:`~pandas:pandas.DataFrame`\ s.
 * :pypi:`Pydantic <pydantic>` automatically registers constrained types - so
-  :func:`~hypothesis.strategies.builds` and :func:`~hypothesis.strategies.from_type`
-  "just work" regardless of the underlying implementation.
+  |st.builds| and |st.from_type| "just work" regardless of the underlying implementation.
 
 -----------------
 Other cool things
@@ -139,8 +138,8 @@ Hypothesis integration via entry points
 
 If you would like to ship Hypothesis strategies for a custom type - either as
 part of the upstream library, or as a third-party extension, there's a catch:
-:func:`~hypothesis.strategies.from_type` only works after the corresponding
-call to :func:`~hypothesis.strategies.register_type_strategy`, and you'll have
+|st.from_type| only works after the corresponding
+call to |st.register_type_strategy|, and you'll have
 the same problem with :func:`~hypothesis.register_random`.  This means that
 either
 

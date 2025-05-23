@@ -8,3 +8,4 @@ Practical guides for applying Hypothesis in specific scenarios. Each guide addre
 
    suppress-healthchecks
    type-strategies
+   strategies-that-shrink

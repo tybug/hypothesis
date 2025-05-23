@@ -89,7 +89,7 @@ def from_model(
 
         shop_strategy = from_model(Shop, company=from_model(Company))
 
-    Like for :func:`~hypothesis.strategies.builds`, you can pass
+    Like for |st.builds|, you can pass
     ``...`` (:obj:`python:Ellipsis`) as a keyword argument to infer a strategy for
     a field which has a default value instead of using the default.
     """
@@ -158,7 +158,7 @@ def from_form(
 
         shop_strategy = from_form(Shop, form_kwargs={"company_id": 5})
 
-    Like for :func:`~hypothesis.strategies.builds`, you can pass
+    Like for |st.builds|, you can pass
     ``...`` (:obj:`python:Ellipsis`) as a keyword argument to infer a strategy for
     a field which has a default value instead of using the default.
     """
