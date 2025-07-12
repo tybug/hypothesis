@@ -11,7 +11,7 @@
 import math
 import time
 from collections import defaultdict
-from collections.abc import Hashable, Iterable, Iterator, Sequence
+from collections.abc import Hashable, Iterator, Sequence
 from enum import IntEnum
 from functools import cached_property
 from random import Random
@@ -335,46 +335,65 @@ class SpanRecord:
 
     def __init__(self) -> None:
         self.labels: list[int] = []
-        self.__index_of_labels: Optional[dict[int, int]] = {}
         self.trail = IntList()
-        self.nodes: list[ChoiceNode] = []
+
+        self.starts = IntList()
+        self.ends = IntList()
+        self.mutator_groups: dict[int, set[tuple[int, int]]] = defaultdict(list)
+
+        self._index_of_labels: Optional[dict[int, int]] = {}
+        self._span_stack = []
+        self._choice_count = 0
+        self._span_count = 0
 
     def freeze(self) -> None:
-        self.__index_of_labels = None
+        self._index_of_labels = None
+        self._span_stack = None
+        self._choice_count = None
+        self._span_count = None
+
+        mutator_groups = defaultdict(set)
+        for label_i, start, end in self.mutator_groups.values():
+            # TODO should we discard start == end cases? occurs for eg st.data()
+            # which is conditionally or never drawn from. arguably swapping
+            # nodes with the empty list is a useful mutation enabled by start == end?
+            key = (start, end)
+            mutator_groups[label_i].add(key)
+
+        # Discard groups with only one span, since the mutator can't
+        # do anything useful with them.
+        self.mutator_groups = [g for g in mutator_groups.values() if len(g) >= 2]
 
     def record_choice(self) -> None:
         self.trail.append(TrailType.CHOICE)
+        self._choice_count += 1
 
     def start_span(self, label: int) -> None:
-        assert self.__index_of_labels is not None
+        assert self._index_of_labels is not None
         try:
-            i = self.__index_of_labels[label]
+            label_i = self._index_of_labels[label]
         except KeyError:
-            i = self.__index_of_labels.setdefault(label, len(self.labels))
+            label_i = self._index_of_labels.setdefault(label, len(self.labels))
             self.labels.append(label)
-        self.trail.append(TrailType.CHOICE + 1 + i)
+
+        self.trail.append(TrailType.CHOICE + 1 + label_i)
+        self.starts.append(self._choice_count)
+        self.mutator_groups[self._span_count] = [label_i, self._choice_count]
+
+        self._span_stack.append(self._span_count)
+        # placeholder value. will be filled in by stop_span.
+        self.ends.append(0)
+
+        self._span_count += 1
 
     def stop_span(self, *, discard: bool) -> None:
-        if discard:
-            self.trail.append(TrailType.STOP_SPAN_DISCARD)
-        else:
-            self.trail.append(TrailType.STOP_SPAN_NO_DISCARD)
-
-
-class _starts_and_ends(SpanProperty):
-    def __init__(self, spans: "Spans") -> None:
-        super().__init__(spans)
-        self.starts = IntList.of_length(len(self.spans))
-        self.ends = IntList.of_length(len(self.spans))
-
-    def start_span(self, i: int, label_index: int) -> None:
-        self.starts[i] = self.choice_count
-
-    def stop_span(self, i: int, *, discarded: bool) -> None:
-        self.ends[i] = self.choice_count
-
-    def finish(self) -> tuple[IntList, IntList]:
-        return (self.starts, self.ends)
+        self.trail.append(
+            TrailType.STOP_SPAN_DISCARD if discard else TrailType.STOP_SPAN_NO_DISCARD
+        )
+        # close the most recent unclosed span
+        span_i = self._span_stack.pop()
+        self.ends[span_i] = self._choice_count
+        self.mutator_groups[span_i].append(self._choice_count)
 
 
 class _discarded(SpanProperty):
@@ -427,24 +446,6 @@ class _label_indices(SpanProperty):
         return self.result
 
 
-class _mutator_groups(SpanProperty):
-    def __init__(self, spans: "Spans") -> None:
-        super().__init__(spans)
-        self.groups: dict[int, set[tuple[int, int]]] = defaultdict(set)
-
-    def start_span(self, i: int, label_index: int) -> None:
-        # TODO should we discard start == end cases? occurs for eg st.data()
-        # which is conditionally or never drawn from. arguably swapping
-        # nodes with the empty list is a useful mutation enabled by start == end?
-        key = (self.spans[i].start, self.spans[i].end)
-        self.groups[label_index].add(key)
-
-    def finish(self) -> Iterable[set[tuple[int, int]]]:
-        # Discard groups with only one span, since the mutator can't
-        # do anything useful with them.
-        return [g for g in self.groups.values() if len(g) >= 2]
-
-
 class Spans:
     """A lazy collection of ``Span`` objects, derived from
     the record of recorded behaviour in ``SpanRecord``.
@@ -462,19 +463,12 @@ class Spans:
         self.__length = self.trail.count(
             TrailType.STOP_SPAN_DISCARD
         ) + record.trail.count(TrailType.STOP_SPAN_NO_DISCARD)
+
+        self.starts = record.starts
+        self.ends = record.ends
+        self.mutator_groups = record.mutator_groups
+
         self.__children: Optional[list[Sequence[int]]] = None
-
-    @cached_property
-    def starts_and_ends(self) -> tuple[IntList, IntList]:
-        return _starts_and_ends(self).run()
-
-    @property
-    def starts(self) -> IntList:
-        return self.starts_and_ends[0]
-
-    @property
-    def ends(self) -> IntList:
-        return self.starts_and_ends[1]
 
     @cached_property
     def discarded(self) -> frozenset[int]:
@@ -491,10 +485,6 @@ class Spans:
     @cached_property
     def label_indices(self) -> IntList:
         return _label_indices(self).run()
-
-    @cached_property
-    def mutator_groups(self) -> list[set[tuple[int, int]]]:
-        return _mutator_groups(self).run()
 
     @property
     def children(self) -> list[Sequence[int]]:
