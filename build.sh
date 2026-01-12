@@ -44,8 +44,7 @@ if ! "$TOOL_PYTHON" -m hypothesistooling check-installed ; then
     # Claude Code: use venv (available) and skip pip upgrades (debian-managed)
     "$PYTHON" -m venv "$TOOL_VIRTUALENV"
   else
-    "$PYTHON" -m pip install --upgrade pip
-    "$PYTHON" -m pip install --upgrade virtualenv
+    "$PYTHON" -m pip install --upgrade pip virtualenv uv
     "$PYTHON" -m virtualenv "$TOOL_VIRTUALENV"
   fi
   "$TOOL_PYTHON" -m pip install --no-warn-script-location -r requirements/tools.txt
