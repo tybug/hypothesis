@@ -31,7 +31,8 @@ fi
 
 TOOL_REQUIREMENTS="$ROOT/requirements/tools.txt"
 
-TOOL_HASH=$("$PYTHON" "$SCRIPTS/tool-hash.py" < "$TOOL_REQUIREMENTS")
+# append PYTHON_VERSION to bust caches when we upgrade versions
+TOOL_HASH=$( (cat "$TOOL_REQUIREMENTS" && echo "$PYTHON_VERSION") | "$PYTHON" "$SCRIPTS/tool-hash.py")
 
 TOOL_VIRTUALENV="$VIRTUALENVS/build-$TOOL_HASH"
 TOOL_PYTHON="$TOOL_VIRTUALENV/bin/python"
@@ -44,8 +45,7 @@ if ! "$TOOL_PYTHON" -m hypothesistooling check-installed ; then
     # Claude Code: use venv (available) and skip pip upgrades (debian-managed)
     "$PYTHON" -m venv "$TOOL_VIRTUALENV"
   else
-    "$PYTHON" -m pip install --upgrade pip
-    "$PYTHON" -m pip install --upgrade virtualenv
+    "$PYTHON" -m pip install --upgrade pip virtualenv uv
     "$PYTHON" -m virtualenv "$TOOL_VIRTUALENV"
   fi
   "$TOOL_PYTHON" -m pip install --no-warn-script-location -r requirements/tools.txt

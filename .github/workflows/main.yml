@@ -43,11 +43,12 @@ jobs:
       with:
         python-version: ${{ env.PYTHON_VERSION }}
         task: ${{ matrix.task }}
+    - name: Install uv
+      if: ${{ startsWith(matrix.task, 'tox-') }}
+      uses: astral-sh/setup-uv@v5
     - name: Install tox
       if: ${{ startsWith(matrix.task, 'tox-') }}
-      run: |
-        pip install --upgrade setuptools pip wheel
-        pip install tox
+      run: uv pip install --system tox tox-uv
     - name: Run tests
       run: |
         export TASK=${{ matrix.task }}
@@ -73,7 +74,6 @@ jobs:
           - check-py310-nocover
           - check-py310-niche
           - check-pypy310-cover
-          # - check-py310-pyjion  # see notes in tox.ini
           - check-py311-cover
           - check-py311-nocover
           - check-py311-niche
@@ -142,10 +142,7 @@ jobs:
         task:
           - check-py314-cover
           - check-py314-nocover
-          # Blocked by a 3.14rc1 bug. see
-          # https://github.com/HypothesisWorks/hypothesis/pull/4490#issuecomment-3144989862.
-          # Can revisit in 3.14rc2.
-          # - check-py314-niche
+          - check-py314-niche
           - check-py314t-cover
           - check-py314t-nocover
           - check-py314t-niche
@@ -233,14 +230,13 @@ jobs:
         python-version: ${{ matrix.python-version }}
         python-architecture: ${{ matrix.python-architecture }}
         task: ${{ matrix.task }}
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
     - name: Install tox
-      run: |
-        pip install --upgrade setuptools pip wheel
-        pip install tox
+      run: uv pip install --system tox tox-uv
     - name: Run tests
       working-directory: ./hypothesis-python
-      run: |
-        tox -e ${{ matrix.task }}
+      run: tox -e ${{ matrix.task }}
 
   # See https://pyodide.org/en/stable/usage/building-and-testing-packages.html
   # and https://github.com/numpy/numpy/blob/9a650391651c8486d8cb8b27b0e75aed5d36033e/.github/workflows/emscripten.yml

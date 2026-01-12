@@ -10,7 +10,7 @@ for k, v in sorted(dict(os.environ).items()):
     print("%s=%s" % (k, v))
 '
 
-pip install .
+uv pip install .
 
 
 PYTEST="python -bb -X dev -m pytest -nauto --durations-min=1.0"
@@ -19,46 +19,46 @@ PYTEST="python -bb -X dev -m pytest -nauto --durations-min=1.0"
 $PYTEST tests/cover tests/pytest
 
 # Run tests for each extra module while the requirements are installed
-pip install ".[pytz, dateutil, zoneinfo]"
+uv pip install ".[pytz, dateutil, zoneinfo]"
 $PYTEST tests/datetime/
-pip uninstall -y pytz python-dateutil
+uv pip uninstall pytz python-dateutil
 
-pip install ".[dpcontracts]"
+uv pip install ".[dpcontracts]"
 $PYTEST tests/dpcontracts/
-pip uninstall -y dpcontracts
+uv pip uninstall dpcontracts
 
 # use pinned redis version instead of inheriting from fakeredis
-pip install "$(grep '^redis==' ../requirements/coverage.txt)"
-pip install "$(grep 'fakeredis==' ../requirements/coverage.txt)"
+uv pip install "$(grep '^redis==' ../requirements/coverage.txt)"
+uv pip install "$(grep 'fakeredis==' ../requirements/coverage.txt)"
 $PYTEST tests/redis/
-pip uninstall -y redis fakeredis
+uv pip uninstall redis fakeredis
 
-pip install "$(grep 'typing-extensions==' ../requirements/coverage.txt)"
+uv pip install "$(grep 'typing-extensions==' ../requirements/coverage.txt)"
 $PYTEST tests/typing_extensions/
-pip uninstall -y typing_extensions
+uv pip uninstall typing_extensions
 
-pip install ".[lark]"
-pip install "$(grep -m 1 -oE 'lark>=([0-9.]+)' ../hypothesis-python/pyproject.toml | tr '>' =)"
+uv pip install ".[lark]"
+uv pip install "$(grep -m 1 -oE 'lark>=([0-9.]+)' ../hypothesis-python/pyproject.toml | tr '>' =)"
 $PYTEST -Wignore tests/lark/
-pip install "$(grep 'lark==' ../requirements/coverage.txt)"
+uv pip install "$(grep 'lark==' ../requirements/coverage.txt)"
 $PYTEST tests/lark/
-pip uninstall -y lark
+uv pip uninstall lark
 
 if [ "$(python -c $'import platform, sys; print(sys.version_info.releaselevel == \'final\' and platform.python_implementation() not in ("PyPy", "GraalVM"))')" = "True" ] ; then
-  pip install ".[codemods,cli]"
+  uv pip install ".[codemods,cli]"
   $PYTEST tests/codemods/
-  pip uninstall -y libcst click
+  uv pip uninstall libcst click
 
   if [ "$(python -c 'import sys; print(sys.version_info[:2] == (3, 10))')" = "True" ] ; then
     # Per NEP-29, this is the last version to support Python 3.10
-    pip install numpy==2.2.6
+    uv pip install numpy==2.2.6
   else
-    pip install "$(grep 'numpy==' ../requirements/coverage.txt)"
+    uv pip install "$(grep 'numpy==' ../requirements/coverage.txt)"
   fi
 
-  pip install "$(grep -E 'black(==| @)' ../requirements/coverage.txt)"
+  uv pip install "$(grep -E 'black(==| @)' ../requirements/coverage.txt)"
   $PYTEST tests/ghostwriter/
-  pip uninstall -y black numpy
+  uv pip uninstall black numpy
 fi
 
 if [ "$(python -c 'import sys; print(sys.version_info[:2] == (3, 10))')" = "False" ] ; then
@@ -78,15 +78,15 @@ case "$(python -c 'import platform; print(platform.python_implementation())')" i
   PyPy|GraalVM)
     ;;
   *)
-    pip install .[django]
+    uv pip install .[django]
     HYPOTHESIS_DJANGO_USETZ=TRUE python -m tests.django.manage test tests.django
     HYPOTHESIS_DJANGO_USETZ=FALSE python -m tests.django.manage test tests.django
-    pip uninstall -y django pytz
+    uv pip uninstall django pytz
 
-    pip install "$(grep 'numpy==' ../requirements/coverage.txt)"
+    uv pip install "$(grep 'numpy==' ../requirements/coverage.txt)"
     $PYTEST tests/array_api
     $PYTEST tests/numpy
 
-    pip install "$(grep 'pandas==' ../requirements/coverage.txt)"
+    uv pip install "$(grep 'pandas==' ../requirements/coverage.txt)"
     $PYTEST tests/pandas
 esac
