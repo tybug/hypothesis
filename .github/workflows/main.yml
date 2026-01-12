@@ -43,18 +43,26 @@ jobs:
       with:
         python-version: ${{ env.PYTHON_VERSION }}
         task: ${{ matrix.task }}
+    - name: Install uv
+      if: ${{ startsWith(matrix.task, 'tox-') }}
+      uses: astral-sh/setup-uv@v5
     - name: Install tox
       if: ${{ startsWith(matrix.task, 'tox-') }}
+      run: uv pip install --system tox tox-uv
+    - name: Create tox environment
+      if: ${{ startsWith(matrix.task, 'tox-') }}
+      working-directory: ./hypothesis-python
       run: |
-        pip install --upgrade setuptools pip wheel
-        pip install tox
+        TOX_TASK="${{ matrix.task }}"
+        TOX_TASK="${TOX_TASK#tox-}"
+        tox -e $TOX_TASK --notest
     - name: Run tests
       run: |
         export TASK=${{ matrix.task }}
         if [[ $TASK == tox-* ]]; then
            TOX_TASK="${TASK#tox-}"
            cd hypothesis-python
-           tox -e $TOX_TASK
+           tox -e $TOX_TASK --skip-pkg-install
         else
           ./build.sh
         fi
@@ -233,14 +241,16 @@ jobs:
         python-version: ${{ matrix.python-version }}
         python-architecture: ${{ matrix.python-architecture }}
         task: ${{ matrix.task }}
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
     - name: Install tox
-      run: |
-        pip install --upgrade setuptools pip wheel
-        pip install tox
+      run: uv pip install --system tox tox-uv
+    - name: Create tox environment
+      working-directory: ./hypothesis-python
+      run: tox -e ${{ matrix.task }} --notest
     - name: Run tests
       working-directory: ./hypothesis-python
-      run: |
-        tox -e ${{ matrix.task }}
+      run: tox -e ${{ matrix.task }} --skip-pkg-install
 
   # See https://pyodide.org/en/stable/usage/building-and-testing-packages.html
   # and https://github.com/numpy/numpy/blob/9a650391651c8486d8cb8b27b0e75aed5d36033e/.github/workflows/emscripten.yml
