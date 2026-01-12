@@ -35,7 +35,6 @@ jobs:
           ~/.cache
           ~/wheelhouse
           ~/.local
-          vendor/bundle
           .tox/
         key: deps-${{ runner.os }}-${{ hashFiles('requirements/*.txt') }}-${{ matrix.task }}
         restore-keys: |
@@ -79,7 +78,7 @@ jobs:
       with:
         name: explicit-example-patches
         path: .hypothesis/patches/latest_hypofuzz_*.patch
-    
+
     # Upload the database so it'll be persisted between runs.
     # Note that we can also pull it down to use locally via
     # https://hypothesis.readthedocs.io/en/latest/database.html#hypothesis.database.GitHubArtifactDatabase

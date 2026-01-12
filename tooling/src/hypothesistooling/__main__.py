@@ -670,11 +670,6 @@ for key, version in PYTHONS.items():
         )
 
 
-@python_tests
-def check_py310_pyjion(*args):
-    run_tox("py310-pyjion", PYTHONS["3.10"], *args)
-
-
 @task()
 def tox(*args):
     if len(args) < 2:
