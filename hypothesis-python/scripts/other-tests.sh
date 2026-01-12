@@ -4,7 +4,7 @@ set -e -o xtrace
 HERE="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$HERE/.."
 
-pip install .
+uv pip install .
 
 
 PYTEST="python -bb -X dev -m pytest -nauto --durations-min=1.0"
@@ -17,71 +17,71 @@ PYTHONOPTIMIZE=2 $PYTEST \
     tests/cover/test_testdecorators.py
 
 # Run tests for each extra module while the requirements are installed
-pip install ".[pytz, dateutil, zoneinfo]"
+uv pip install ".[pytz, dateutil, zoneinfo]"
 $PYTEST tests/datetime/
-pip uninstall -y pytz python-dateutil
+uv pip uninstall pytz python-dateutil
 
-pip install ".[dpcontracts]"
+uv pip install ".[dpcontracts]"
 $PYTEST tests/dpcontracts/
-pip uninstall -y dpcontracts
+uv pip uninstall dpcontracts
 
-pip install attrs
+uv pip install attrs
 $PYTEST tests/attrs/
-pip uninstall -y attrs
+uv pip uninstall attrs
 
 # use pinned redis version instead of inheriting from fakeredis
-pip install "$(grep '^redis==' ../requirements/coverage.txt)"
-pip install "$(grep 'fakeredis==' ../requirements/coverage.txt)"
-pip install "$(grep 'typing-extensions==' ../requirements/coverage.txt)"
+uv pip install "$(grep '^redis==' ../requirements/coverage.txt)"
+uv pip install "$(grep 'fakeredis==' ../requirements/coverage.txt)"
+uv pip install "$(grep 'typing-extensions==' ../requirements/coverage.txt)"
 $PYTEST tests/redis/
-pip uninstall -y redis fakeredis
+uv pip uninstall redis fakeredis
 
 $PYTEST tests/typing_extensions/
 if [ "$HYPOTHESIS_PROFILE" != "crosshair" ] && [ "$(python -c 'import sys; print(sys.version_info[:2] > (3, 10))')" = "True" ]; then
-  pip uninstall -y typing-extensions
+  uv pip uninstall typing-extensions
 fi
 
-pip install "$(grep 'annotated-types==' ../requirements/coverage.txt)"
+uv pip install "$(grep 'annotated-types==' ../requirements/coverage.txt)"
 $PYTEST tests/test_annotated_types.py
-pip uninstall -y annotated-types
+uv pip uninstall annotated-types
 
-pip install ".[lark]"
-pip install "$(grep -m 1 -oE 'lark>=([0-9.]+)' ../hypothesis-python/pyproject.toml | tr '>' =)"
+uv pip install ".[lark]"
+uv pip install "$(grep -m 1 -oE 'lark>=([0-9.]+)' ../hypothesis-python/pyproject.toml | tr '>' =)"
 $PYTEST -Wignore tests/lark/
-pip install "$(grep 'lark==' ../requirements/coverage.txt)"
+uv pip install "$(grep 'lark==' ../requirements/coverage.txt)"
 $PYTEST tests/lark/
-pip uninstall -y lark
+uv pip uninstall lark
 
 if [ "$(python -c $'import platform, sys; print(sys.version_info.releaselevel == \'final\' and platform.python_implementation() not in ("PyPy", "GraalVM"))')" = "True" ] ; then
-  pip install ".[codemods,cli]"
+  uv pip install ".[codemods,cli]"
   $PYTEST tests/codemods/
 
   if [ "$(python -c 'import sys; print(sys.version_info[:2] == (3, 10))')" = "True" ] ; then
     # Per NEP-29, this is the last version to support Python 3.10
-    pip install numpy==2.2.6
+    uv pip install numpy==2.2.6
   else
-    pip install "$(grep 'numpy==' ../requirements/coverage.txt)"
+    uv pip install "$(grep 'numpy==' ../requirements/coverage.txt)"
   fi
 
-  pip install "$(grep -E 'black(==| @)' ../requirements/coverage.txt)"
+  uv pip install "$(grep -E 'black(==| @)' ../requirements/coverage.txt)"
   $PYTEST tests/patching/
-  pip uninstall -y libcst
+  uv pip uninstall libcst
 
   # One of the ghostwriter tests uses attrs (though hypothesis[ghostwriter] does not require attrs).
-  pip install attrs
+  uv pip install attrs
   $PYTEST tests/ghostwriter/
-  pip uninstall -y attrs
-  pip uninstall -y black
+  uv pip uninstall attrs
+  uv pip uninstall black
 
   if [ "$HYPOTHESIS_PROFILE" != "crosshair" ] ; then
     # Crosshair tracer is not compatible with no-gil
     if [ "$(python -c "import sys; print('free-threading' in sys.version)")" != "True" ] ; then
       # Run twice, interleaved by other tests, to make it more probable to tickle any problems
       # from accidentally caching/retaining crosshair proxy objects
-      pip install pytest-repeat
-      pip install -r ../requirements/crosshair.txt
+      uv pip install pytest-repeat
+      uv pip install -r ../requirements/crosshair.txt
       # requirements/crosshair.txt pins hypothesis. Re-override it with our local changes
-      pip install .
+      uv pip install .
       $PYTEST --count=2 --repeat-scope=session tests/numpy tests/crosshair
       # ...but running twice takes time, don't overdo it
       $PYTEST tests/array_api
