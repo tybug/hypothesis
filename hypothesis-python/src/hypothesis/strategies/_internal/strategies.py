@@ -577,6 +577,7 @@ class SampledFromStrategy(SearchStrategy[Ex]):
             tuple[Literal["filter", "map"], Callable[[Ex], Any]],
             ...,
         ] = (),
+        _precomputed_label: int | None = None,
     ):
         super().__init__()
         self.elements = cu.check_sample(elements, "sampled_from")
@@ -587,12 +588,18 @@ class SampledFromStrategy(SearchStrategy[Ex]):
 
         self._cached_repr: str | None = None
 
+        # Transformations (filter/map) don't affect the label, so when creating
+        # filtered/mapped copies we can reuse the already-computed label.
+        if _precomputed_label is not None:
+            self._SearchStrategy__label = _precomputed_label
+
     def map(self, pack: Callable[[Ex], T]) -> SearchStrategy[T]:
         s = type(self)(
             self.elements,
             force_repr=self.force_repr,
             force_repr_braces=self.force_repr_braces,
             transformations=(*self._transformations, ("map", pack)),
+            _precomputed_label=self.label,
         )
         # guaranteed by the ("map", pack) transformation
         return cast(SearchStrategy[T], s)
@@ -603,6 +610,7 @@ class SampledFromStrategy(SearchStrategy[Ex]):
             force_repr=self.force_repr,
             force_repr_braces=self.force_repr_braces,
             transformations=(*self._transformations, ("filter", condition)),
+            _precomputed_label=self.label,
         )
 
     def __repr__(self):
