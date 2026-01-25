@@ -8,23 +8,37 @@
 # v. 2.0. If a copy of the MPL was not distributed with this file, You can
 # obtain one at https://mozilla.org/MPL/2.0/.
 
+import os
 import sys
+import tempfile
 import time
 from collections import Counter
-
-import pytest
+from pathlib import Path
 
 from hypothesis import Phase, settings
 from hypothesis.database import (
     DirectoryBasedExampleDatabase,
     InMemoryExampleDatabase,
     MultiplexedDatabase,
+    _hash,
 )
-from hypothesis.internal.compat import WINDOWS
 
-from tests.common.utils import flaky, skipif_threading, wait_for
+from tests.common.utils import skipif_threading, wait_for
 from tests.cover.test_database_backend import _database_conforms_to_listener_api
 
+
+def atomic_write(path: Path, data: bytes) -> None:
+    fd, tmpname = tempfile.mkstemp()
+    tmppath = Path(tmpname)
+    os.write(fd, data)
+    os.close(fd)
+    tmppath.rename(path)
+
+
+# Depending on the underlying filesystem notification system, DirectoryBasedExampleDatabase
+# might drop events. If we save a value in a new key, and the event for writing
+# the value gets delivered before the event for writing
+#
 # e.g.
 # * FAILED hypothesis-python/tests/watchdog/test_database.py::
 #   test_database_listener_multiplexed -
@@ -33,20 +47,6 @@ from tests.cover.test_database_backend import _database_conforms_to_listener_api
 # * FAILED hypothesis-python/tests/watchdog/test_database.py::
 #   test_still_listens_if_directory_did_not_exist -
 #   Exception: timing out after waiting 60s for condition lambda: len(events) == 1
-#
-# It seems possible the failures are correlated on windows (ie if one db test fails,
-# another is more likely to). I suspect a watchdog or windows issue: possibly a
-# change handler is not being registered by watchdog correctly, or is registered
-# too late, or... . A timeout of 60 not firing means it's unlikely "the machine is
-# slow and takes a while to fire the event" is the problem here.
-#
-# It seems watchdog CI also has a similar problem:
-# * https://github.com/gorakhargosh/watchdog/pull/581#issuecomment-548257915
-# * cmd+f `def rerun_filter` in the watchdog repository
-pytestmark = [
-    pytest.mark.skipif(WINDOWS, reason="watchdog tests are too flaky on windows"),
-    pytest.mark.skipif(sys.platform == "darwin", reason="times out often on osx"),
-]
 
 
 # we need real time here, not monkeypatched for CI
@@ -58,7 +58,7 @@ def test_database_listener_directory():
         lambda path: DirectoryBasedExampleDatabase(path),
         supports_value_delete=False,
         parent_settings=settings(
-            # this test is very expensive because we wait between every rule for
+            # this test is expensive because we wait between every rule for
             # the filesystem observer to fire.
             max_examples=5,
             stateful_step_count=10,
@@ -86,13 +86,15 @@ def test_database_listener_multiplexed(tmp_path):
     time_sleep(0.1)
 
     db.save(b"a", b"a")
-    wait_for(lambda: events == [("save", (b"a", b"a"))] * 2, timeout=60)
+    wait_for(lambda: events == [("save", (b"a", b"a"))] * 2, timeout=30)
 
     db.remove_listener(listener)
+    time_sleep(0.1)
     db.delete(b"a", b"a")
     db.save(b"a", b"b")
-    wait_for(lambda: events == [("save", (b"a", b"a"))] * 2, timeout=60)
+    wait_for(lambda: events == [("save", (b"a", b"a"))] * 2, timeout=30)
 
+    time_sleep(0.1)
     db.add_listener(listener)
     time_sleep(0.1)
 
@@ -111,7 +113,7 @@ def test_database_listener_multiplexed(tmp_path):
             # both
             ("save", (b"a", b"c")): 2,
         },
-        timeout=60,
+        timeout=30,
     )
 
 
@@ -150,7 +152,7 @@ def test_database_listener_directory_explicit(tmp_path):
             ("delete", (b"k1", None)),
             ("save", (b"k1", b"v3")),
         ],
-        timeout=60,
+        timeout=30,
     )
 
     # moving into a nonexistent key
@@ -193,7 +195,6 @@ def test_database_listener_directory_explicit(tmp_path):
         raise NotImplementedError(f"unknown platform {sys.platform}")
 
 
-@flaky(max_runs=5, min_passes=1)  # time_sleep(0.1) probably isn't enough here
 @skipif_threading  # add_listener is not thread safe because watchdog is not
 def test_database_listener_directory_move(tmp_path):
     db = DirectoryBasedExampleDatabase(tmp_path)
@@ -219,7 +220,7 @@ def test_database_listener_directory_move(tmp_path):
             # windows doesn't fire move events, so value is None
             ("delete", (b"k1", None if sys.platform.startswith("win") else b"v1")),
         },
-        timeout=60,
+        timeout=30,
     )
 
 
@@ -241,4 +242,107 @@ def test_still_listens_if_directory_did_not_exist(tmp_path):
 
     assert not events
     db.save(b"k1", b"v1")
-    wait_for(lambda: len(events) == 1, timeout=60)
+    wait_for(lambda: len(events) == 1, timeout=30)
+
+
+@skipif_threading
+def test_deferred_save_event(tmp_path):
+    # in this test:
+    # consistently test a deferred save by avoiding db.save():
+    # * write the value file, triggering a deferred save
+    # * write the metakeys file, flushing the deferred save
+    db = DirectoryBasedExampleDatabase(tmp_path)
+    events = []
+    db.add_listener(events.append)
+
+    key = b"k1"
+    value = b"v1"
+    key_hash = _hash(key)
+
+    # trigger a deferred save
+    (db.path / key_hash).mkdir()
+    atomic_write(db.path / key_hash / _hash(value), value)
+    wait_for(lambda: key_hash in db._pending_events, timeout=10)
+    assert events == []
+    assert db._pending_events[key_hash] == [("save", value)]
+
+    # flush the deferred save
+    (db.path / db._metakeys_hash).mkdir()
+    atomic_write(db.path / db._metakeys_hash / key_hash, key)
+    wait_for(lambda: events == [("save", (key, value))], timeout=10)
+    assert db._pending_events == {}
+
+
+def test_deferred_delete_event(tmp_path):
+    # in this test:
+    # * write the value file, triggering a deferred save
+    # * delete the value file, triggering a deferred delete
+    # * write the metakeys file, flushing both the save and delete
+    db = DirectoryBasedExampleDatabase(tmp_path)
+    events = []
+    db.add_listener(events.append)
+
+    key = b"k1"
+    value = b"v1"
+    key_hash = _hash(key)
+
+    # trigger a deferred save
+    (db.path / key_hash).mkdir()
+    value_file = db.path / key_hash / _hash(value)
+    atomic_write(value_file, value)
+    wait_for(lambda: key_hash in db._pending_events, timeout=10)
+
+    # trigger a deferred delete (metakey still hasn't been written)
+    value_file.unlink()
+    wait_for(lambda: len(db._pending_events[key_hash]) == 2, timeout=10)
+    assert events == []
+    assert db._pending_events[key_hash] == [("save", value), ("delete", None)]
+
+    # flush the deferred events
+    (db.path / db._metakeys_hash).mkdir()
+    atomic_write(db.path / db._metakeys_hash / key_hash, key)
+    wait_for(lambda: len(events) == 2, timeout=10)
+    assert events == [("save", (key, value)), ("delete", (key, None))]
+    assert db._pending_events == {}
+
+
+def test_deferred_move_event(tmp_path):
+    # * write the value file, triggering a deferred save
+    # * move the value file, triggering a deferred delete + save
+    # * write the metakeys files, flushing the events
+    db = DirectoryBasedExampleDatabase(tmp_path)
+    events = []
+    db.add_listener(events.append)
+
+    src_key = b"k1"
+    dest_key = b"k2"
+    value = b"v1"
+    src_hash = _hash(src_key)
+    dest_hash = _hash(dest_key)
+
+    # trigger a deferred save
+    (db.path / src_hash).mkdir()
+    src_file = db.path / src_hash / _hash(value)
+    atomic_write(src_file, value)
+    wait_for(lambda: src_hash in db._pending_events, timeout=10)
+
+    # trigger a deferred delete + save (from the move)
+    (db.path / dest_hash).mkdir()
+    dest_file = db.path / dest_hash / _hash(value)
+    src_file.rename(dest_file)
+    wait_for(lambda: dest_hash in db._pending_events, timeout=10)
+
+    # flush the deferred events
+    (db.path / db._metakeys_hash).mkdir()
+    atomic_write(db.path / db._metakeys_hash / src_hash, src_key)
+    atomic_write(db.path / db._metakeys_hash / dest_hash, dest_key)
+
+    wait_for(lambda: len(events) == 3, timeout=10)
+    assert ("save", (src_key, value)) in events
+    # watchdog may fire move or delete+create depending on platform
+    assert ("delete", (src_key, value)) in events or (
+        "delete",
+        (src_key, None),
+    ) in events
+    assert ("save", (dest_key, value)) in events
+    assert db._pending_events == {}

@@ -614,6 +614,7 @@ def _database_conforms_to_listener_api(
         @rule()
         def remove_listener(self):
             self.db.remove_listener(self.listener)
+            time_sleep(0.1)
             self.active_listeners.remove(self.listener)
 
         @rule()

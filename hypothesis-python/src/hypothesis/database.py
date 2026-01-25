@@ -17,6 +17,7 @@ import sys
 import tempfile
 import warnings
 import weakref
+from collections import defaultdict
 from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
@@ -24,7 +25,7 @@ from hashlib import sha384
 from os import PathLike, getenv
 from pathlib import Path, PurePath
 from queue import Queue
-from threading import Thread
+from threading import Lock, Thread
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -446,6 +447,11 @@ class DirectoryBasedExampleDatabase(ExampleDatabase):
         self.path = Path(path)
         self.keypaths: dict[bytes, Path] = {}
         self._observer: BaseObserver | None = None
+        self._hash_to_key: dict[str, bytes] = {}
+        self._pending_events: dict[
+            str, list[tuple[Literal["save", "delete"], bytes | None]]
+        ] = defaultdict(list)
+        self._pending_events_lock: Lock | None = None
 
     def __repr__(self) -> str:
         return f"DirectoryBasedExampleDatabase({self.path!r})"
@@ -576,9 +582,23 @@ class DirectoryBasedExampleDatabase(ExampleDatabase):
             )
             return
 
-        hash_to_key = {_hash(key): key for key in self.fetch(self._metakeys_name)}
+        self._hash_to_key = {_hash(key): key for key in self.fetch(self._metakeys_name)}
+        self._pending_events = defaultdict(list)
+        self._pending_events_lock = Lock()
+
         _metakeys_hash = self._metakeys_hash
         _broadcast_change = self._broadcast_change
+        _hash_to_key = self._hash_to_key
+        _pending_events = self._pending_events
+        _pending_events_lock = self._pending_events_lock
+
+        def _flush_pending(key_hash: str, key_bytes: bytes) -> None:
+            with _pending_events_lock:
+                events = _pending_events.pop(key_hash, [])
+            for event_type, value in events:
+                _broadcast_change(
+                    cast(ListenerEventT, (event_type, (key_bytes, value)))
+                )
 
         class Handler(FileSystemEventHandler):
             def on_created(_self, event: FileCreatedEvent | DirCreatedEvent) -> None:
@@ -594,18 +614,24 @@ class DirectoryBasedExampleDatabase(ExampleDatabase):
 
                 if key_hash == _metakeys_hash:
                     try:
-                        hash_to_key[value_path.name] = value_path.read_bytes()
+                        key_bytes = value_path.read_bytes()
                     except OSError:  # pragma: no cover
                         # this might occur if all the values in a key have been
                         # deleted and DirectoryBasedExampleDatabase removes its
                         # metakeys entry (which is `value_path` here`).
-                        pass
+                        return
+                    _hash_to_key[value_path.name] = key_bytes
+                    _flush_pending(value_path.name, key_bytes)
                     return
 
-                key = hash_to_key.get(key_hash)
-                if key is None:  # pragma: no cover
-                    # we didn't recognize this key. This shouldn't ever happen,
-                    # but some race condition trickery might cause this.
+                key = _hash_to_key.get(key_hash)
+                if key is None:
+                    try:
+                        value = value_path.read_bytes()
+                    except OSError:  # pragma: no cover
+                        return
+                    with _pending_events_lock:
+                        _pending_events[key_hash].append(("save", value))
                     return
 
                 try:
@@ -620,8 +646,16 @@ class DirectoryBasedExampleDatabase(ExampleDatabase):
                 assert isinstance(event.src_path, str)
 
                 value_path = Path(event.src_path)
-                key = hash_to_key.get(value_path.parent.name)
-                if key is None:  # pragma: no cover
+                key_hash = value_path.parent.name
+
+                # ignore metakey deletions
+                if key_hash == _metakeys_hash:
+                    return
+
+                key = _hash_to_key.get(key_hash)
+                if key is None:
+                    with _pending_events_lock:
+                        _pending_events[key_hash].append(("delete", None))
                     return
 
                 _broadcast_change(("delete", (key, None)))
@@ -633,19 +667,28 @@ class DirectoryBasedExampleDatabase(ExampleDatabase):
 
                 src_path = Path(event.src_path)
                 dest_path = Path(event.dest_path)
-                k1 = hash_to_key.get(src_path.parent.name)
-                k2 = hash_to_key.get(dest_path.parent.name)
-
-                if k1 is None or k2 is None:  # pragma: no cover
-                    return
+                src_key_hash = src_path.parent.name
+                dest_key_hash = dest_path.parent.name
 
                 try:
                     value = dest_path.read_bytes()
                 except OSError:  # pragma: no cover
                     return
 
-                _broadcast_change(("delete", (k1, value)))
-                _broadcast_change(("save", (k2, value)))
+                k1 = _hash_to_key.get(src_key_hash)
+                k2 = _hash_to_key.get(dest_key_hash)
+
+                if k1 is None:
+                    with _pending_events_lock:
+                        _pending_events[src_key_hash].append(("delete", value))
+                else:
+                    _broadcast_change(("delete", (k1, value)))
+
+                if k2 is None:
+                    with _pending_events_lock:
+                        _pending_events[dest_key_hash].append(("save", value))
+                else:
+                    _broadcast_change(("save", (k2, value)))
 
         # If we add a listener to a DirectoryBasedExampleDatabase whose database
         # directory doesn't yet exist, the watchdog observer will not fire any
