@@ -165,6 +165,21 @@ def test_issue_739_regression(x):
     pass
 
 
+def test_issue_4651_decimals_with_places_respects_bounds():
+    # Regression test: decimals with places parameter must respect bounds,
+    # even for bounds with many significant digits
+    min_ = decimal.Decimal(f"0.{'0' * 63}1")
+    max_ = decimal.Decimal(f"{'9' * 64}.{'9' * 64}")
+    strat = decimals(min_value=min_, max_value=max_, places=2)
+
+    @given(strat)
+    @settings(max_examples=1000)
+    def inner(d):
+        assert min_ <= d <= max_
+
+    inner()
+
+
 def test_consistent_decimal_error():
     bad = "invalid argument to Decimal"
     with pytest.raises(InvalidArgument) as excinfo:

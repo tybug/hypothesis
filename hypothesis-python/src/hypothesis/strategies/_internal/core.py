@@ -1811,7 +1811,13 @@ def decimals(
         # Fixed-point decimals are basically integers with a scale factor
         def ctx(val):
             """Return a context in which this value is lossless."""
-            precision = ceil(math.log10(abs(val) or 1)) + places + 1
+            if isinstance(val, Decimal):
+                # For Decimals, use actual number of significant digits
+                num_digits = len(val.as_tuple().digits)
+            else:
+                # For integers, estimate number of digits from magnitude
+                num_digits = ceil(math.log10(abs(val) or 1)) + 1
+            precision = num_digits + places
             return Context(prec=max([precision, 1]))
 
         def int_to_decimal(val):
