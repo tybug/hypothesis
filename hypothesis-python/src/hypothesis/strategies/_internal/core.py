@@ -1812,12 +1812,9 @@ def decimals(
         def ctx(val):
             """Return a context in which this value is lossless."""
             if isinstance(val, Decimal):
-                # For Decimals, use actual number of significant digits
-                num_digits = len(val.as_tuple().digits)
+                precision = len(val.as_tuple().digits)
             else:
-                # For integers, estimate number of digits from magnitude
-                num_digits = ceil(math.log10(abs(val) or 1)) + 1
-            precision = num_digits + places
+                precision = ceil(math.log10(abs(val) or 1)) + 1
             return Context(prec=max([precision, 1]))
 
         def int_to_decimal(val):
