@@ -180,6 +180,20 @@ def test_issue_4651_decimals_with_places_respects_bounds():
     inner()
 
 
+@checks_deprecated_behaviour
+def test_issue_4651_decimals_with_float_bounds_respects_places():
+    # Float bounds also affected: Decimal(0.1) has 55 significant digits,
+    # so the precision calculation must use actual digit count, not log10.
+    min_ = decimal.Decimal(0.1)  # noqa: RUF032
+
+    @given(decimals(min_value=0.1, max_value=0.5, places=2))
+    @settings(max_examples=1000)
+    def inner(d):
+        assert min_ <= d
+
+    inner()
+
+
 def test_consistent_decimal_error():
     bad = "invalid argument to Decimal"
     with pytest.raises(InvalidArgument) as excinfo:
